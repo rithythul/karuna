@@ -3,6 +3,7 @@ mod db;
 mod error;
 mod llm;
 mod models;
+mod orchestrator;
 mod redis_client;
 mod sandbox;
 mod skills;
@@ -24,6 +25,7 @@ pub struct AppState {
     pub redis: redis_client::RedisClient,
     pub sandbox: sandbox::SandboxManager,
     pub skills: Arc<skills::SkillRegistry>,
+    pub orchestrator: orchestrator::Orchestrator,
 }
 
 #[tokio::main]
@@ -56,7 +58,16 @@ async fn main() {
     // Don't warm pool on startup for dev — it requires the sandbox image to be built
     // sandbox.warm_pool(3).await.expect("Failed to warm sandbox pool");
     let skills = Arc::new(skills::default_registry());
-    let state = AppState { db, config: config.clone(), llm, redis, sandbox, skills };
+
+    let orchestrator = orchestrator::Orchestrator::new(
+        db.clone(), llm.clone(), sandbox.clone(), skills.clone(), redis.clone(),
+    );
+
+    // Spawn worker in background
+    let worker = orchestrator.clone();
+    tokio::spawn(async move { worker.run_worker().await });
+
+    let state = AppState { db, config: config.clone(), llm, redis, sandbox, skills, orchestrator };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
