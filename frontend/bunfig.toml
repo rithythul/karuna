@@ -1,0 +1,8 @@
+# Bun configuration
+# This project uses Bun as the package manager and runtime.
+# Use `bun install` instead of `npm install`
+# Use `bun run <script>` instead of `npm run <script>`
+
+[install]
+# Allow version ranges for flexibility
+exact = false
