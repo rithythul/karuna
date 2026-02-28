@@ -138,17 +138,20 @@ impl RedisClient {
     ///
     /// Returns `None` if the timeout elapses with no task available.
     pub async fn dequeue_task(&self, timeout_secs: f64) -> Result<Option<String>, AppError> {
-        let mut conn = self.conn().await?;
-        let result: Result<Option<(String, String)>, _> = redis::cmd("BLPOP")
+        // Use a dedicated connection for BLPOP since it blocks and can tie up
+        // pooled connections, causing pool exhaustion/timeouts.
+        let client = redis::Client::open(self.redis_url.as_str())
+            .map_err(|e| AppError::Internal(format!("Redis client error: {e}")))?;
+        let mut conn = client.get_multiplexed_async_connection().await
+            .map_err(|e| AppError::Internal(format!("Redis connection error: {e}")))?;
+        let result: redis::RedisResult<Option<(String, String)>> = redis::cmd("BLPOP")
             .arg("karuna:queue:tasks")
             .arg(timeout_secs)
-            .query_async(&mut *conn)
+            .query_async(&mut conn)
             .await;
         match result {
             Ok(Some((_, task_id))) => Ok(Some(task_id)),
-            Ok(None) => Ok(None),
-            Err(e) if e.to_string().contains("not a bulk string") || e.to_string().contains("response type") => Ok(None), // timeout returns Nil
-            Err(e) => Err(AppError::Internal(format!("Redis dequeue error: {e}"))),
+            Ok(None) | Err(_) => Ok(None), // timeout or type mismatch = no task
         }
     }
 
