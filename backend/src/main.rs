@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod error;
+mod llm;
 mod models;
 
 use axum::{routing::get, Json, Router};
@@ -14,6 +15,7 @@ use config::Config;
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub config: Config,
+    pub llm: llm::LlmClient,
 }
 
 #[tokio::main]
@@ -38,7 +40,8 @@ async fn main() {
         .await
         .expect("Failed to run migrations");
 
-    let state = AppState { db, config: config.clone() };
+    let llm = llm::LlmClient::new(&config);
+    let state = AppState { db, config: config.clone(), llm };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
