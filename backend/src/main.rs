@@ -1,11 +1,20 @@
 mod config;
+mod db;
 mod error;
+mod models;
 
 use axum::{routing::get, Json, Router};
+use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use config::Config;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub db: sqlx::PgPool,
+    pub config: Config,
+}
 
 #[tokio::main]
 async fn main() {
@@ -18,6 +27,19 @@ async fn main() {
     dotenvy::dotenv().ok();
     let config = Config::from_env();
 
+    let db = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&config.database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    sqlx::migrate!("./migrations")
+        .run(&db)
+        .await
+        .expect("Failed to run migrations");
+
+    let state = AppState { db, config: config.clone() };
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -25,7 +47,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health))
-        .layer(cors);
+        .layer(cors)
+        .with_state(state);
 
     let addr = format!("{}:{}", config.host, config.port);
     tracing::info!("Karuna listening on {}", addr);
