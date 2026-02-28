@@ -5,6 +5,9 @@ mod llm;
 mod models;
 mod redis_client;
 mod sandbox;
+mod skills;
+
+use std::sync::Arc;
 
 use axum::{routing::get, Json, Router};
 use sqlx::postgres::PgPoolOptions;
@@ -20,6 +23,7 @@ pub struct AppState {
     pub llm: llm::LlmClient,
     pub redis: redis_client::RedisClient,
     pub sandbox: sandbox::SandboxManager,
+    pub skills: Arc<skills::SkillRegistry>,
 }
 
 #[tokio::main]
@@ -51,7 +55,8 @@ async fn main() {
         .expect("Failed to connect to Docker");
     // Don't warm pool on startup for dev — it requires the sandbox image to be built
     // sandbox.warm_pool(3).await.expect("Failed to warm sandbox pool");
-    let state = AppState { db, config: config.clone(), llm, redis, sandbox };
+    let skills = Arc::new(skills::default_registry());
+    let state = AppState { db, config: config.clone(), llm, redis, sandbox, skills };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
