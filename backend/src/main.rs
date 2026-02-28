@@ -3,6 +3,7 @@ mod db;
 mod error;
 mod llm;
 mod models;
+mod redis_client;
 
 use axum::{routing::get, Json, Router};
 use sqlx::postgres::PgPoolOptions;
@@ -16,6 +17,7 @@ pub struct AppState {
     pub db: sqlx::PgPool,
     pub config: Config,
     pub llm: llm::LlmClient,
+    pub redis: redis_client::RedisClient,
 }
 
 #[tokio::main]
@@ -41,7 +43,9 @@ async fn main() {
         .expect("Failed to run migrations");
 
     let llm = llm::LlmClient::new(&config);
-    let state = AppState { db, config: config.clone(), llm };
+    let redis = redis_client::RedisClient::new(&config.redis_url)
+        .expect("Failed to create Redis connection pool");
+    let state = AppState { db, config: config.clone(), llm, redis };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
