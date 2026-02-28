@@ -1,3 +1,4 @@
+mod api;
 mod config;
 mod db;
 mod error;
@@ -7,6 +8,7 @@ mod orchestrator;
 mod redis_client;
 mod sandbox;
 mod skills;
+mod ws;
 
 use std::sync::Arc;
 
@@ -76,6 +78,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/ws/tasks/{id}", get(ws::ws_handler))
+        .merge(api::routes())
         .layer(cors)
         .with_state(state);
 
