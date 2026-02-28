@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::models::{Task, TaskEvent, TaskStatus, TaskStep};
+use crate::models::{Artifact, Task, TaskEvent, TaskMemory, TaskStatus, TaskStep};
 
 pub async fn create_task(pool: &PgPool, user_id: &str, goal: &str) -> Result<Task, AppError> {
     let task = sqlx::query_as::<_, Task>(
@@ -149,4 +149,127 @@ pub async fn get_task_events(pool: &PgPool, task_id: Uuid) -> Result<Vec<TaskEve
     .fetch_all(pool)
     .await?;
     Ok(events)
+}
+
+// --- Step reflection ---
+
+pub async fn set_step_reflection(
+    pool: &PgPool,
+    step_id: Uuid,
+    reflection: &str,
+    retry_count: i32,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE task_steps SET reflection = $1, retry_count = $2 WHERE id = $3")
+        .bind(reflection)
+        .bind(retry_count)
+        .bind(step_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// --- Artifacts ---
+
+pub async fn create_artifact(
+    pool: &PgPool,
+    task_id: Uuid,
+    step_id: Option<Uuid>,
+    name: &str,
+    artifact_type: &str,
+    mime_type: Option<&str>,
+    path_in_sandbox: Option<&str>,
+    content: Option<&str>,
+    metadata: Option<serde_json::Value>,
+    size_bytes: Option<i64>,
+) -> Result<Artifact, AppError> {
+    let artifact = sqlx::query_as::<_, Artifact>(
+        "INSERT INTO artifacts (task_id, step_id, name, artifact_type, mime_type, \
+         path_in_sandbox, content, metadata, size_bytes) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *"
+    )
+    .bind(task_id)
+    .bind(step_id)
+    .bind(name)
+    .bind(artifact_type)
+    .bind(mime_type)
+    .bind(path_in_sandbox)
+    .bind(content)
+    .bind(&metadata)
+    .bind(size_bytes)
+    .fetch_one(pool)
+    .await?;
+    Ok(artifact)
+}
+
+pub async fn get_task_artifacts(pool: &PgPool, task_id: Uuid) -> Result<Vec<Artifact>, AppError> {
+    let artifacts = sqlx::query_as::<_, Artifact>(
+        "SELECT * FROM artifacts WHERE task_id = $1 ORDER BY created_at"
+    )
+    .bind(task_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(artifacts)
+}
+
+// --- Task Memory ---
+
+pub async fn set_memory(
+    pool: &PgPool,
+    task_id: Uuid,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO task_memory (task_id, key, value) VALUES ($1, $2, $3) \
+         ON CONFLICT (task_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"
+    )
+    .bind(task_id)
+    .bind(key)
+    .bind(&value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_memory(
+    pool: &PgPool,
+    task_id: Uuid,
+    key: &str,
+) -> Result<Option<TaskMemory>, AppError> {
+    let mem = sqlx::query_as::<_, TaskMemory>(
+        "SELECT * FROM task_memory WHERE task_id = $1 AND key = $2"
+    )
+    .bind(task_id)
+    .bind(key)
+    .fetch_optional(pool)
+    .await?;
+    Ok(mem)
+}
+
+pub async fn get_all_memory(
+    pool: &PgPool,
+    task_id: Uuid,
+) -> Result<Vec<TaskMemory>, AppError> {
+    let mems = sqlx::query_as::<_, TaskMemory>(
+        "SELECT * FROM task_memory WHERE task_id = $1 ORDER BY created_at"
+    )
+    .bind(task_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(mems)
+}
+
+// --- Task duration ---
+
+pub async fn set_task_duration(
+    pool: &PgPool,
+    task_id: Uuid,
+    duration_ms: i64,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE tasks SET total_duration_ms = $1, updated_at = now() WHERE id = $2")
+        .bind(duration_ms)
+        .bind(task_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import ArtifactViewer, { type Artifact } from "@/components/ArtifactViewer";
+import StepsSidebar from "@/components/StepsSidebar";
 
 interface TaskEvent {
   id?: string;
@@ -19,6 +21,8 @@ interface TaskStep {
   step_order: number;
   status: string;
   error: string | null;
+  retry_count: number;
+  reflection: string | null;
 }
 
 interface TaskData {
@@ -27,6 +31,8 @@ interface TaskData {
   status: string;
   result: Record<string, unknown> | null;
   error: string | null;
+  token_usage: Record<string, unknown> | null;
+  total_duration_ms: number | null;
 }
 
 type ConnectionStatus = "connecting" | "live" | "completed" | "failed" | "disconnected";
@@ -36,7 +42,10 @@ export default function TaskPage() {
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [task, setTask] = useState<TaskData | null>(null);
   const [steps, setSteps] = useState<TaskStep[]>([]);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
+  const [currentStep, setCurrentStep] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<"events" | "artifacts">("events");
   const terminalRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -60,6 +69,7 @@ export default function TaskPage() {
       .then((data) => {
         if (data.task) setTask(data.task);
         if (data.steps) setSteps(data.steps);
+        if (data.artifacts) setArtifacts(data.artifacts);
         if (data.task?.status === "Completed" || data.task?.status === "completed") {
           terminalRef.current = true;
           setStatus("completed");
@@ -76,6 +86,14 @@ export default function TaskPage() {
         if (Array.isArray(data) && data.length > 0) {
           setEvents(data);
         }
+      })
+      .catch(() => {});
+
+    // Fetch artifacts
+    fetch(`/api/tasks/${id}/artifacts`)
+      .then((res) => res.json())
+      .then((data: Artifact[]) => {
+        if (Array.isArray(data)) setArtifacts(data);
       })
       .catch(() => {});
   }, [id]);
@@ -97,17 +115,58 @@ export default function TaskPage() {
         if (!event.created_at) event.created_at = new Date().toISOString();
         setEvents((prev) => [...prev, event]);
 
+        // Track current step
+        if (event.event_type === "step_started" && event.data.step) {
+          setCurrentStep(Number(event.data.step));
+        }
+
+        // Update steps on step events
+        if (event.event_type === "step_completed" || event.event_type === "step_failed") {
+          fetch(`/api/tasks/${id}`)
+            .then((res) => res.json())
+            .then((data) => {
+              if (data.steps) setSteps(data.steps);
+              if (data.artifacts) setArtifacts(data.artifacts);
+            })
+            .catch(() => {});
+        }
+
+        // Handle reflection events
+        if (event.event_type === "step_reflection") {
+          fetch(`/api/tasks/${id}`)
+            .then((res) => res.json())
+            .then((data) => { if (data.steps) setSteps(data.steps); })
+            .catch(() => {});
+        }
+
+        // Handle replan events
+        if (event.event_type === "replan_ready") {
+          fetch(`/api/tasks/${id}`)
+            .then((res) => res.json())
+            .then((data) => { if (data.steps) setSteps(data.steps); })
+            .catch(() => {});
+        }
+
         const isCompleted = event.event_type === "task_completed";
         const isFailed = event.event_type === "task_failed";
 
         if (isCompleted || isFailed) {
           terminalRef.current = true;
           setStatus(isCompleted ? "completed" : "failed");
+          setCurrentStep(null);
           fetch(`/api/tasks/${id}`)
             .then((res) => res.json())
             .then((data) => {
               if (data.task) setTask(data.task);
               if (data.steps) setSteps(data.steps);
+              if (data.artifacts) setArtifacts(data.artifacts);
+            })
+            .catch(() => {});
+          // Final artifact fetch
+          fetch(`/api/tasks/${id}/artifacts`)
+            .then((res) => res.json())
+            .then((data: Artifact[]) => {
+              if (Array.isArray(data)) setArtifacts(data);
             })
             .catch(() => {});
         }
@@ -152,11 +211,13 @@ export default function TaskPage() {
     (s) => s.status.toLowerCase() === "completed"
   ).length;
 
+  const progressPct = steps.length > 0 ? (completedSteps / steps.length) * 100 : 0;
+
   return (
     <div className="min-h-screen" style={{ background: "var(--bg-deep)" }}>
       {/* Top bar */}
       <header
-        className="sticky top-0 z-40 flex items-center justify-between px-6 py-4"
+        className="sticky top-0 z-40 flex items-center justify-between px-6 py-3"
         style={{
           background: "rgba(8,8,10,0.85)",
           backdropFilter: "blur(12px)",
@@ -189,198 +250,208 @@ export default function TaskPage() {
           <StatusPill status={status} />
         </div>
 
-        <div
-          className="flex items-center gap-3 text-[13px] font-mono"
-          style={{ color: "var(--text-tertiary)" }}
-        >
-          <span>{formatTime(elapsed)}</span>
-        </div>
-      </header>
-
-      <div className="mx-auto max-w-[860px] px-6 pt-8 pb-24">
-        {/* Goal */}
-        <div className="mb-8 animate-fade-in-up">
-          <h1
-            className="text-[1.75rem] leading-snug tracking-[-0.01em] mb-2"
-            style={{
-              fontFamily: "var(--font-display)",
-              color: "var(--text-primary)",
-            }}
-          >
-            {task?.goal ?? "Loading..."}
-          </h1>
-          <p
-            className="text-[12px] font-mono"
-            style={{ color: "var(--text-tertiary)" }}
-          >
-            {id}
-          </p>
-        </div>
-
-        {/* Steps progress */}
-        {steps.length > 0 && (
-          <div
-            className="mb-8 rounded-xl p-5 animate-fade-in-up"
-            style={{
-              background: "var(--bg-raised)",
-              border: "1px solid var(--border-subtle)",
-              animationDelay: "50ms",
-            }}
-          >
-            {/* Progress bar */}
-            <div className="flex items-center justify-between mb-4">
-              <span
-                className="text-[11px] font-medium uppercase tracking-[0.08em]"
-                style={{ color: "var(--text-tertiary)" }}
+        <div className="flex items-center gap-4">
+          {/* Progress mini-bar in header */}
+          {steps.length > 0 && (
+            <div className="flex items-center gap-2">
+              <div
+                className="h-1 w-20 rounded-full overflow-hidden"
+                style={{ background: "var(--bg-elevated)" }}
               >
-                Execution Progress
-              </span>
+                <div
+                  className="h-full rounded-full transition-all duration-700 ease-out"
+                  style={{
+                    width: `${progressPct}%`,
+                    background: status === "failed" ? "var(--status-error)" : "var(--accent)",
+                  }}
+                />
+              </div>
               <span
-                className="text-[12px] font-mono"
-                style={{ color: "var(--text-secondary)" }}
+                className="text-[11px] font-mono"
+                style={{ color: "var(--text-tertiary)" }}
               >
                 {completedSteps}/{steps.length}
               </span>
             </div>
+          )}
+          <span
+            className="text-[13px] font-mono"
+            style={{ color: "var(--text-tertiary)" }}
+          >
+            {formatTime(elapsed)}
+          </span>
+        </div>
+      </header>
 
-            {/* Bar */}
+      {/* Main two-column layout */}
+      <div className="flex" style={{ minHeight: "calc(100vh - 52px)" }}>
+        {/* Left sidebar - Steps */}
+        <aside
+          className="w-[300px] shrink-0 overflow-y-auto p-4"
+          style={{
+            borderRight: "1px solid var(--border-subtle)",
+            maxHeight: "calc(100vh - 52px)",
+            position: "sticky",
+            top: "52px",
+          }}
+        >
+          <StepsSidebar steps={steps} currentStep={currentStep} />
+
+          {/* Duration */}
+          {task?.total_duration_ms && (
             <div
-              className="h-1 rounded-full overflow-hidden mb-5"
-              style={{ background: "var(--bg-elevated)" }}
+              className="mt-3 rounded-lg p-3 text-center"
+              style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}
             >
-              <div
-                className="h-full rounded-full transition-all duration-700 ease-out"
-                style={{
-                  width: `${steps.length > 0 ? (completedSteps / steps.length) * 100 : 0}%`,
-                  background: status === "failed" ? "var(--status-error)" : "var(--accent)",
-                }}
-              />
-            </div>
-
-            {/* Step list */}
-            <div className="flex flex-col gap-2">
-              {steps.map((step, i) => (
-                <div
-                  key={step.id}
-                  className="flex items-center gap-3 py-1.5"
-                >
-                  <StepIndicator status={step.status} />
-                  <span
-                    className="text-[12px] font-mono shrink-0"
-                    style={{ color: "var(--text-tertiary)", width: "32px" }}
-                  >
-                    {i + 1}.
-                  </span>
-                  <span
-                    className="text-[13px] font-medium shrink-0 px-2 py-0.5 rounded-md"
-                    style={{
-                      background: "var(--bg-elevated)",
-                      color: "var(--accent)",
-                      fontSize: "11px",
-                      fontFamily: "var(--font-mono)",
-                    }}
-                  >
-                    {step.skill}
-                  </span>
-                  <span
-                    className="text-[13px] truncate"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    {step.description}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Event stream */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <span
-              className="text-[11px] font-medium uppercase tracking-[0.08em]"
-              style={{ color: "var(--text-tertiary)" }}
-            >
-              Event Stream
-            </span>
-            {status === "live" && (
-              <span
-                className="flex items-center gap-1.5 text-[11px] font-mono"
-                style={{ color: "var(--status-running)" }}
-              >
-                <span className="relative flex h-1.5 w-1.5">
-                  <span
-                    className="absolute inline-flex h-full w-full rounded-full opacity-75"
-                    style={{
-                      background: "var(--status-running)",
-                      animation: "pulse-ring 1.5s ease-out infinite",
-                    }}
-                  />
-                  <span
-                    className="relative inline-flex h-1.5 w-1.5 rounded-full"
-                    style={{ background: "var(--status-running)" }}
-                  />
-                </span>
-                streaming
+              <span className="text-[10px] uppercase tracking-wider font-medium" style={{ color: "var(--text-tertiary)" }}>
+                Total Duration
               </span>
-            )}
-          </div>
-
-          {events.length === 0 ? (
-            <div
-              className="flex items-center gap-3 py-6 text-[13px]"
-              style={{ color: "var(--text-tertiary)" }}
-            >
-              <div className="animate-shimmer h-4 w-48 rounded" />
-            </div>
-          ) : (
-            <div className="flex flex-col gap-0">
-              {events.map((event, i) => (
-                <EventRow
-                  key={event.id ?? `ws-${i}`}
-                  event={event}
-                  index={i}
-                  formatTimestamp={formatTimestamp}
-                />
-              ))}
+              <p className="text-[16px] font-mono mt-1" style={{ color: "var(--accent)" }}>
+                {(task.total_duration_ms / 1000).toFixed(1)}s
+              </p>
             </div>
           )}
-          <div ref={bottomRef} />
-        </div>
+        </aside>
 
-        {/* Result */}
-        {status === "completed" && task?.result && (
-          <ResultBlock result={task.result} />
-        )}
-
-        {/* Error */}
-        {status === "failed" && task?.error && (
-          <div
-            className="rounded-xl p-5 animate-fade-in-up"
-            style={{
-              background: "var(--status-error-dim)",
-              border: "1px solid rgba(248,113,113,0.15)",
-            }}
-          >
-            <div className="flex items-center gap-2 mb-3">
-              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="var(--status-error)" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-              </svg>
-              <span
-                className="text-[11px] font-medium uppercase tracking-[0.08em]"
-                style={{ color: "var(--status-error)" }}
+        {/* Right main content */}
+        <main className="flex-1 min-w-0 overflow-y-auto">
+          <div className="max-w-[720px] mx-auto px-6 pt-6 pb-24">
+            {/* Goal */}
+            <div className="mb-6 animate-fade-in-up">
+              <h1
+                className="text-[1.5rem] leading-snug tracking-[-0.01em] mb-1"
+                style={{
+                  fontFamily: "var(--font-display)",
+                  color: "var(--text-primary)",
+                }}
               >
-                Task Failed
-              </span>
+                {task?.goal ?? "Loading..."}
+              </h1>
+              <p
+                className="text-[11px] font-mono"
+                style={{ color: "var(--text-tertiary)" }}
+              >
+                {id}
+              </p>
             </div>
-            <pre
-              className="text-[13px] leading-relaxed font-mono whitespace-pre-wrap break-words"
-              style={{ color: "rgba(248,113,113,0.8)" }}
+
+            {/* Tabs */}
+            <div
+              className="flex items-center gap-0 mb-5 rounded-lg overflow-hidden"
+              style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}
             >
-              {task.error}
-            </pre>
+              {(["events", "artifacts"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className="flex-1 py-2.5 text-[12px] font-medium uppercase tracking-wider transition-all"
+                  style={{
+                    background: activeTab === tab ? "var(--bg-elevated)" : "transparent",
+                    color: activeTab === tab ? "var(--text-primary)" : "var(--text-tertiary)",
+                    borderBottom: activeTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
+                  }}
+                >
+                  {tab === "events" ? `Events (${events.length})` : `Artifacts (${artifacts.length})`}
+                </button>
+              ))}
+            </div>
+
+            {/* Events tab */}
+            {activeTab === "events" && (
+              <div className="mb-8">
+                {status === "live" && (
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <span className="relative flex h-1.5 w-1.5">
+                      <span
+                        className="absolute inline-flex h-full w-full rounded-full opacity-75"
+                        style={{ background: "var(--status-running)", animation: "pulse-ring 1.5s ease-out infinite" }}
+                      />
+                      <span
+                        className="relative inline-flex h-1.5 w-1.5 rounded-full"
+                        style={{ background: "var(--status-running)" }}
+                      />
+                    </span>
+                    <span className="text-[11px] font-mono" style={{ color: "var(--status-running)" }}>
+                      streaming
+                    </span>
+                  </div>
+                )}
+
+                {events.length === 0 ? (
+                  <div className="flex flex-col gap-3 py-8">
+                    <div className="animate-shimmer h-4 w-48 rounded" />
+                    <div className="animate-shimmer h-4 w-32 rounded" />
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-0">
+                    {events.map((event, i) => (
+                      <EventRow
+                        key={event.id ?? `ws-${i}`}
+                        event={event}
+                        index={i}
+                        formatTimestamp={formatTimestamp}
+                      />
+                    ))}
+                  </div>
+                )}
+                <div ref={bottomRef} />
+              </div>
+            )}
+
+            {/* Artifacts tab */}
+            {activeTab === "artifacts" && (
+              <div className="mb-8">
+                {artifacts.length === 0 ? (
+                  <div
+                    className="rounded-xl p-8 text-center"
+                    style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}
+                  >
+                    <span className="text-2xl block mb-2">📦</span>
+                    <p className="text-[13px]" style={{ color: "var(--text-tertiary)" }}>
+                      {status === "live" ? "Artifacts will appear here as they are created..." : "No artifacts produced for this task."}
+                    </p>
+                  </div>
+                ) : (
+                  <ArtifactViewer artifacts={artifacts} />
+                )}
+              </div>
+            )}
+
+            {/* Result */}
+            {status === "completed" && task?.result && (
+              <ResultBlock result={task.result} />
+            )}
+
+            {/* Error */}
+            {status === "failed" && task?.error && (
+              <div
+                className="rounded-xl p-5 animate-fade-in-up"
+                style={{
+                  background: "var(--status-error-dim)",
+                  border: "1px solid rgba(248,113,113,0.15)",
+                }}
+              >
+                <div className="flex items-center gap-2 mb-3">
+                  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="var(--status-error)" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+                  </svg>
+                  <span
+                    className="text-[11px] font-medium uppercase tracking-[0.08em]"
+                    style={{ color: "var(--status-error)" }}
+                  >
+                    Task Failed
+                  </span>
+                </div>
+                <pre
+                  className="text-[13px] leading-relaxed font-mono whitespace-pre-wrap break-words"
+                  style={{ color: "rgba(248,113,113,0.8)" }}
+                >
+                  {task.error}
+                </pre>
+              </div>
+            )}
           </div>
-        )}
+        </main>
       </div>
     </div>
   );
@@ -447,63 +518,6 @@ function StatusPill({ status }: { status: ConnectionStatus }) {
   );
 }
 
-function StepIndicator({ status }: { status: string }) {
-  const s = status.toLowerCase();
-
-  if (s === "completed") {
-    return (
-      <div
-        className="flex items-center justify-center w-5 h-5 rounded-full"
-        style={{ background: "var(--status-success-dim)" }}
-      >
-        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="var(--status-success)" strokeWidth={3}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-        </svg>
-      </div>
-    );
-  }
-
-  if (s === "failed") {
-    return (
-      <div
-        className="flex items-center justify-center w-5 h-5 rounded-full"
-        style={{ background: "var(--status-error-dim)" }}
-      >
-        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="var(--status-error)" strokeWidth={3}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </div>
-    );
-  }
-
-  if (s === "running") {
-    return (
-      <div className="flex items-center justify-center w-5 h-5">
-        <span className="relative flex h-3 w-3">
-          <span
-            className="absolute inline-flex h-full w-full rounded-full opacity-75"
-            style={{
-              background: "var(--status-running)",
-              animation: "pulse-ring 1.5s ease-out infinite",
-            }}
-          />
-          <span
-            className="relative inline-flex h-3 w-3 rounded-full"
-            style={{ background: "var(--status-running)" }}
-          />
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="w-5 h-5 rounded-full"
-      style={{ border: "1.5px solid var(--border-default)" }}
-    />
-  );
-}
-
 function EventRow({
   event,
   index,
@@ -521,6 +535,11 @@ function EventRow({
     step_started: { color: "var(--status-running)", icon: "●" },
     step_completed: { color: "var(--status-success)", icon: "✓" },
     step_failed: { color: "var(--status-error)", icon: "✗" },
+    step_reflection: { color: "var(--accent)", icon: "💭" },
+    step_warning: { color: "var(--accent)", icon: "⚠" },
+    replanning: { color: "var(--status-planning)", icon: "↻" },
+    replan_ready: { color: "var(--status-planning)", icon: "◆" },
+    artifact_created: { color: "var(--status-success)", icon: "📎" },
     task_completed: { color: "var(--status-success)", icon: "★" },
     task_failed: { color: "var(--status-error)", icon: "✗" },
   };
@@ -535,7 +554,6 @@ function EventRow({
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 
-  // Extract meaningful data preview
   const preview = getEventPreview(event);
 
   return (
@@ -546,7 +564,6 @@ function EventRow({
         animationDelay: `${Math.min(index * 30, 300)}ms`,
       }}
     >
-      {/* Icon */}
       <span
         className="mt-0.5 text-[12px] shrink-0 w-5 text-center"
         style={{ color: cfg.color }}
@@ -554,7 +571,6 @@ function EventRow({
         {cfg.icon}
       </span>
 
-      {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-3">
           <span
@@ -594,40 +610,124 @@ function getEventPreview(event: TaskEvent): string | null {
     case "plan_ready":
       return d.steps ? `${d.steps} steps planned` : null;
     case "sandbox_ready":
-      return d.container_id ? `Container ${String(d.container_id)}` : null;
+      return d.container_id ? `Container ${String(d.container_id).slice(0, 12)}` : null;
     case "step_started":
       return d.description
         ? `Step ${d.step}/${d.total}: ${d.description}`
         : null;
     case "step_completed": {
       const rp = d.result_preview ? String(d.result_preview) : null;
-      return rp && rp.length > 120 ? rp.slice(0, 120) + "..." : rp;
+      return rp && rp.length > 160 ? rp.slice(0, 160) + "..." : rp;
     }
     case "step_failed":
       return d.error ? String(d.error) : null;
+    case "step_reflection":
+      return d.reflection ? `🔍 ${String(d.reflection)}` : null;
+    case "step_warning":
+      return d.message ? String(d.message) : null;
+    case "replanning":
+      return "Re-evaluating approach based on execution results...";
+    case "replan_ready":
+      return d.new_steps ? `Replanned: ${d.new_steps} new steps` : "Plan updated";
+    case "artifact_created":
+      return d.name ? `Created: ${String(d.name)}` : null;
     case "task_completed":
-      return "All steps completed successfully";
+      return d.summary ? String(d.summary) : "All steps completed successfully";
     case "task_failed":
       return d.error ? String(d.error) : null;
     default:
-      return null;
+      return d.message ? String(d.message) : null;
   }
 }
 
 function ResultBlock({ result }: { result: Record<string, unknown> }) {
+  const summary = result.summary ? String(result.summary) : null;
   const output = result.output ? String(result.output) : null;
+  const keyOutputs = result.key_outputs as string[] | undefined;
+  const nextSteps = result.next_steps as string[] | undefined;
   const code = result.code ? String(result.code) : null;
   const language = result.language ? String(result.language) : null;
 
   return (
     <div className="animate-fade-in-up flex flex-col gap-4">
-      {/* Output */}
+      {/* Summary */}
+      {summary && (
+        <div
+          className="rounded-xl p-5"
+          style={{
+            background: "var(--accent-glow)",
+            border: "1px solid var(--border-accent)",
+          }}
+        >
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[14px]">✨</span>
+            <span
+              className="text-[11px] font-medium uppercase tracking-[0.08em]"
+              style={{ color: "var(--accent)" }}
+            >
+              Summary
+            </span>
+          </div>
+          <p
+            className="text-[14px] leading-relaxed"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {summary}
+          </p>
+        </div>
+      )}
+
+      {/* Key outputs */}
+      {keyOutputs && keyOutputs.length > 0 && (
+        <div
+          className="rounded-xl p-5"
+          style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}
+        >
+          <span
+            className="text-[11px] font-medium uppercase tracking-[0.08em] block mb-3"
+            style={{ color: "var(--text-tertiary)" }}
+          >
+            Key Outputs
+          </span>
+          <ul className="flex flex-col gap-2">
+            {keyOutputs.map((item, i) => (
+              <li key={i} className="flex items-start gap-2 text-[13px]" style={{ color: "var(--text-secondary)" }}>
+                <span style={{ color: "var(--status-success)" }}>✓</span>
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Next steps */}
+      {nextSteps && nextSteps.length > 0 && (
+        <div
+          className="rounded-xl p-5"
+          style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}
+        >
+          <span
+            className="text-[11px] font-medium uppercase tracking-[0.08em] block mb-3"
+            style={{ color: "var(--text-tertiary)" }}
+          >
+            Suggested Next Steps
+          </span>
+          <ul className="flex flex-col gap-2">
+            {nextSteps.map((item, i) => (
+              <li key={i} className="flex items-start gap-2 text-[13px]" style={{ color: "var(--text-secondary)" }}>
+                <span style={{ color: "var(--accent)" }}>→</span>
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Raw output */}
       {output && (
         <div
           className="rounded-xl overflow-hidden"
-          style={{
-            border: "1px solid var(--border-accent)",
-          }}
+          style={{ border: "1px solid var(--border-accent)" }}
         >
           <div
             className="flex items-center gap-2 px-4 py-2.5"
@@ -648,10 +748,7 @@ function ResultBlock({ result }: { result: Record<string, unknown> }) {
           </div>
           <pre
             className="p-4 text-[13px] leading-relaxed overflow-auto max-h-[400px] font-mono whitespace-pre-wrap break-words"
-            style={{
-              background: "var(--bg-raised)",
-              color: "var(--text-secondary)",
-            }}
+            style={{ background: "var(--bg-raised)", color: "var(--text-secondary)" }}
           >
             {output}
           </pre>
@@ -662,9 +759,7 @@ function ResultBlock({ result }: { result: Record<string, unknown> }) {
       {code && (
         <div
           className="rounded-xl overflow-hidden"
-          style={{
-            border: "1px solid var(--border-subtle)",
-          }}
+          style={{ border: "1px solid var(--border-subtle)" }}
         >
           <div
             className="flex items-center gap-2 px-4 py-2.5"
@@ -682,10 +777,7 @@ function ResultBlock({ result }: { result: Record<string, unknown> }) {
           </div>
           <pre
             className="p-4 text-[13px] leading-relaxed overflow-auto max-h-[400px] font-mono whitespace-pre"
-            style={{
-              background: "var(--bg-base)",
-              color: "var(--text-secondary)",
-            }}
+            style={{ background: "var(--bg-base)", color: "var(--text-secondary)" }}
           >
             {code}
           </pre>

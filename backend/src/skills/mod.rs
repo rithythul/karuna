@@ -1,5 +1,10 @@
-pub mod research;
+pub mod browse;
 pub mod code;
+pub mod data_analysis;
+pub mod deploy;
+pub mod file_ops;
+pub mod research;
+pub mod shell;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -68,10 +73,15 @@ impl SkillRegistry {
     }
 }
 
-/// Build the default registry with built-in skills
+/// Build the default registry with all built-in skills
 pub fn default_registry() -> SkillRegistry {
     let mut registry = SkillRegistry::new();
     registry.register(Arc::new(research::ResearchSkill));
     registry.register(Arc::new(code::CodeSkill));
+    registry.register(Arc::new(browse::BrowseSkill));
+    registry.register(Arc::new(file_ops::FileSkill));
+    registry.register(Arc::new(data_analysis::DataAnalysisSkill));
+    registry.register(Arc::new(shell::ShellSkill));
+    registry.register(Arc::new(deploy::DeploySkill));
     registry
 }
