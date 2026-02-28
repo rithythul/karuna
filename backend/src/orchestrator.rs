@@ -71,9 +71,9 @@ impl Orchestrator {
         db::update_task_status(&self.pool, task_id, TaskStatus::Planning).await?;
         self.emit(task_id, "planning", json!({})).await;
 
-        let skill_list = self.skills.list();
+        let skill_list = self.skills.list_with_schema();
         let skill_descriptions = skill_list.iter()
-            .map(|(name, desc)| format!("- {name}: {desc}"))
+            .map(|(name, desc, schema)| format!("- {name}: {desc}\n  Input schema: {schema}"))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -82,9 +82,13 @@ impl Orchestrator {
              Goal: {goal}\n\n\
              Available skills:\n{skill_descriptions}\n\n\
              Return a JSON array of steps. Each step has:\n\
-             - \"skill\": the skill name to use\n\
+             - \"skill\": the skill name (must be one of the available skills above)\n\
              - \"description\": what this step does\n\
-             - \"input\": the input object for the skill\n\n\
+             - \"input\": the input object matching the skill's input schema EXACTLY\n\n\
+             IMPORTANT: The \"input\" field must use the EXACT field names from the skill's input schema.\n\
+             For the \"code\" skill, use {{\"task\": \"description of what to code\", \"language\": \"python\"}}.\n\
+             Do NOT put actual code in the input — just describe the task.\n\
+             For the \"research\" skill, use {{\"query\": \"what to research\"}}.\n\n\
              Return ONLY valid JSON array, no markdown fences, no explanation.",
             goal = task.goal,
         );

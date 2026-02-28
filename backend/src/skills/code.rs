@@ -160,6 +160,9 @@ impl Skill for CodeSkill {
     fn description(&self) -> &str {
         "Write, execute, and test code in a sandboxed environment"
     }
+    fn input_schema(&self) -> &str {
+        r#"{"task": "(required) description of what code to write", "language": "(optional, default python) programming language"}"#
+    }
 
     async fn execute(
         &self,

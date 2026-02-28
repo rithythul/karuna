@@ -31,6 +31,8 @@ pub struct SkillOutput {
 pub trait Skill: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
+    /// JSON schema hint for the planner — describes required/optional input fields.
+    fn input_schema(&self) -> &str;
 
     async fn execute(
         &self,
@@ -59,6 +61,10 @@ impl SkillRegistry {
 
     pub fn list(&self) -> Vec<(&str, &str)> {
         self.skills.values().map(|s| (s.name(), s.description())).collect()
+    }
+
+    pub fn list_with_schema(&self) -> Vec<(&str, &str, &str)> {
+        self.skills.values().map(|s| (s.name(), s.description(), s.input_schema())).collect()
     }
 }
 

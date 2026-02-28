@@ -166,6 +166,9 @@ impl Skill for ResearchSkill {
     fn description(&self) -> &str {
         "Research a topic using web search and LLM synthesis"
     }
+    fn input_schema(&self) -> &str {
+        r#"{"query": "(required) the research topic or question"}"#
+    }
 
     async fn execute(
         &self,
