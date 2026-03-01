@@ -31,7 +31,7 @@ pub struct AppState {
     pub llm: llm::LlmClient,
     pub redis: redis_client::RedisClient,
     pub sandbox: sandbox::SandboxManager,
-    pub skills: Arc<skills::SkillRegistry>,
+    pub agents: Arc<agent_runtime::AgentRegistry>,
     pub orchestrator: orchestrator::Orchestrator,
 }
 
@@ -65,17 +65,17 @@ async fn main() {
         .expect("Failed to connect to Docker");
     // Don't warm pool on startup for dev — it requires the sandbox image to be built
     // sandbox.warm_pool(3).await.expect("Failed to warm sandbox pool");
-    let skills = Arc::new(skills::default_registry());
+    let agents = Arc::new(agents::default_registry());
 
     let orchestrator = orchestrator::Orchestrator::new(
-        db.clone(), llm.clone(), sandbox.clone(), skills.clone(), redis.clone(),
+        db.clone(), llm.clone(), sandbox.clone(), agents.clone(), redis.clone(),
     );
 
     // Spawn worker in background
     let worker = orchestrator.clone();
     tokio::spawn(async move { worker.run_worker().await });
 
-    let state = AppState { db, config: config.clone(), llm, redis, sandbox, skills, orchestrator };
+    let state = AppState { db, config: config.clone(), llm, redis, sandbox, agents, orchestrator };
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

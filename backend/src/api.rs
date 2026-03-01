@@ -95,11 +95,11 @@ async fn cancel_task(
 async fn list_skills(
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {
-    let skills: Vec<_> = state.skills.list()
+    let agents: Vec<_> = state.agents.list()
         .into_iter()
         .map(|(name, desc)| serde_json::json!({"name": name, "description": desc}))
         .collect();
-    Json(serde_json::json!({"skills": skills}))
+    Json(serde_json::json!({"skills": agents}))
 }
 
 async fn system_status(
@@ -107,12 +107,12 @@ async fn system_status(
 ) -> Json<serde_json::Value> {
     let queue_len = state.redis.queue_length().await.unwrap_or(0);
     let sandbox_pool = state.sandbox.pool_size().await;
-    let skills: Vec<_> = state.skills.list().into_iter().map(|(n, _)| n.to_string()).collect();
+    let agents: Vec<_> = state.agents.list().into_iter().map(|(n, _)| n.to_string()).collect();
     Json(serde_json::json!({
         "status": "ok",
         "queue_length": queue_len,
         "sandbox_pool_size": sandbox_pool,
-        "available_skills": skills,
+        "available_skills": agents,
     }))
 }
 

@@ -7,23 +7,23 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::agent_runtime::{AgentRegistry, AgentRuntime};
 use crate::db;
 use crate::error::AppError;
 use crate::llm::{ChatMessage, LlmClient};
 use crate::models::{TaskStatus, UserMemory};
 use crate::redis_client::{RedisClient, TaskEvent};
 use crate::sandbox::SandboxManager;
-use crate::skills::{SkillContext, SkillRegistry};
 use crate::soul;
-
-const MAX_STEP_RETRIES: u32 = 3;
+use crate::tools::SandboxHandle;
 
 #[derive(Clone)]
 pub struct Orchestrator {
     pool: PgPool,
     llm: LlmClient,
     sandbox: SandboxManager,
-    skills: Arc<SkillRegistry>,
+    agents: Arc<AgentRegistry>,
+    runtime: Arc<AgentRuntime>,
     redis: RedisClient,
     cancellation_tokens: Arc<RwLock<HashMap<Uuid, CancellationToken>>>,
 }
@@ -33,11 +33,12 @@ impl Orchestrator {
         pool: PgPool,
         llm: LlmClient,
         sandbox: SandboxManager,
-        skills: Arc<SkillRegistry>,
+        agents: Arc<AgentRegistry>,
         redis: RedisClient,
     ) -> Self {
+        let runtime = Arc::new(AgentRuntime::new(llm.clone(), agents.clone()));
         Self {
-            pool, llm, sandbox, skills, redis,
+            pool, llm, sandbox, agents, runtime, redis,
             cancellation_tokens: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -161,6 +162,10 @@ impl Orchestrator {
         let mut all_artifacts: Vec<String> = Vec::new();
         let current_plan = plan;
 
+        // Create a single SandboxHandle shared across all steps
+        let sandbox_handle = SandboxHandle::new(self.sandbox.clone(), container_id.clone());
+        let task_id_str = task_id.to_string();
+
         for (i, step) in steps.iter().enumerate() {
             // Check for cancellation before each step
             if token.is_cancelled() {
@@ -179,17 +184,17 @@ impl Orchestrator {
 
             db::update_step_status(&self.pool, step.id, TaskStatus::Running).await?;
 
-            let skill = match self.skills.get(&step.skill) {
-                Some(s) => s,
+            // Look up agent by name (step.skill now contains agent names)
+            let agent = match self.agents.get(&step.skill) {
+                Some(a) => a,
                 None => {
-                    // Fallback: use shell skill for unknown skills
-                    tracing::warn!("Unknown skill '{}', attempting shell fallback", step.skill);
+                    tracing::warn!("Unknown agent '{}', attempting code fallback", step.skill);
                     self.emit(task_id, "step_warning", json!({
                         "step": i + 1,
-                        "warning": format!("Unknown skill '{}', using shell fallback", step.skill),
+                        "warning": format!("Unknown agent '{}', using code fallback", step.skill),
                     })).await;
-                    match self.skills.get("shell") {
-                        Some(s) => s,
+                    match self.agents.get("code") {
+                        Some(a) => a,
                         None => {
                             db::update_step_status(&self.pool, step.id, TaskStatus::Failed).await?;
                             continue;
@@ -198,40 +203,24 @@ impl Orchestrator {
                 }
             };
 
-            let ctx = SkillContext {
-                llm: self.llm.clone(),
-                sandbox: self.sandbox.clone(),
-                container_id: container_id.clone(),
-                task_id: task_id.to_string(),
-                user_id: task.user_id.clone(),
-                db: self.pool.clone(),
-            };
-
-            // Build input with context from previous steps
-            let mut input = current_plan.get(i)
-                .and_then(|s| s.get("input"))
-                .cloned()
-                .unwrap_or(json!({}));
-
-            if let Some(obj) = input.as_object_mut() {
-                obj.insert("_previous_result".into(), step_results.last().cloned().unwrap_or(json!({})));
-                obj.insert("_all_previous_results".into(), json!(step_results));
-                obj.insert("_step_number".into(), json!(i + 1));
-                obj.insert("_total_steps".into(), json!(steps.len()));
-            }
-
-            // Execute with self-healing retry loop
-            let result = self.execute_step_with_reflection(
-                &ctx, task_id, step.id, &skill, input, i, &step.skill, &step.description,
+            // Run the agent with the step description as its goal
+            let result = self.runtime.run(
+                &agent,
+                &step.description,
+                &sandbox_handle,
+                &task_id_str,
+                &self.redis,
+                0,
             ).await;
 
             match result {
-                Ok(output) => {
-                    step_results.push(output.result.clone());
-                    all_artifacts.extend(output.artifacts.clone());
+                Ok(agent_result) => {
+                    let step_output = json!({"output": agent_result.output});
+                    step_results.push(step_output.clone());
+                    all_artifacts.extend(agent_result.artifacts.clone());
 
                     // Store artifacts in DB
-                    for artifact_path in &output.artifacts {
+                    for artifact_path in &agent_result.artifacts {
                         let name = artifact_path.rsplit('/').next().unwrap_or(artifact_path);
                         let artifact_type = Self::infer_artifact_type(name);
                         let mime = Self::infer_mime_type(name);
@@ -246,15 +235,16 @@ impl Orchestrator {
                     self.emit(task_id, "step_completed", json!({
                         "step": i + 1,
                         "skill": step.skill,
-                        "artifacts": output.artifacts,
-                        "result_preview": output.result.to_string().chars().take(500).collect::<String>(),
+                        "artifacts": agent_result.artifacts,
+                        "result_preview": agent_result.output.chars().take(500).collect::<String>(),
+                        "turns_used": agent_result.turns_used,
                     })).await;
                     db::add_task_event(&self.pool, task_id, "step_completed",
                         json!({"step": i + 1, "skill": step.skill})).await?;
 
                     // Update memory with latest result
                     db::set_memory(&self.pool, task_id, &format!("step_{}_result", i + 1),
-                        output.result).await?;
+                        step_output).await?;
                 }
                 Err(e) => {
                     db::update_step_status(&self.pool, step.id, TaskStatus::Failed).await?;
@@ -323,44 +313,36 @@ impl Orchestrator {
 
     /// Create the initial execution plan
     async fn create_plan(&self, goal: &str, user_context: Option<&str>) -> Result<Vec<Value>, AppError> {
-        let skill_list = self.skills.list_with_schema();
-        let skill_descriptions = skill_list.iter()
-            .map(|(name, desc, schema)| format!("- {name}: {desc}\n  Input schema: {schema}"))
+        let agent_list = self.agents.list();
+        let agent_descriptions = agent_list.iter()
+            .map(|(name, desc)| format!("- {name}: {desc}"))
             .collect::<Vec<_>>()
             .join("\n");
 
         let role_instructions = "You are a world-class autonomous AI agent planner. Your job is to decompose \
-             complex goals into a precise sequence of executable steps.";
+             complex goals into a precise sequence of executable steps, each delegated to a specialist agent.";
 
         let system = soul::system_prompt(role_instructions, user_context);
 
         let plan_prompt = format!(
             "Goal: {goal}\n\n\
-             Available skills:\n{skill_descriptions}\n\n\
+             Available agents:\n{agent_descriptions}\n\n\
              PLANNING GUIDELINES:\n\
              1. Break the goal into the MINIMUM number of steps needed\n\
-             2. Use the most specific skill for each subtask\n\
-             3. Steps execute sequentially — later steps can reference earlier results\n\
-             4. For web tasks, use 'browse' skill with Playwright\n\
-             5. For file creation/editing, use 'file' skill\n\
-             6. For data processing, use 'data_analysis' skill\n\
-             7. For running tools/builds, use 'shell' skill\n\
-             8. For research/information gathering, use 'research' skill\n\
-             9. For coding tasks, use 'code' skill\n\
-             10. For deployment, use 'deploy' skill as the final step\n\n\
+             2. Assign the most appropriate agent for each step\n\
+             3. Steps execute sequentially — later agents can build on earlier results\n\
+             4. Each agent is autonomous: give it a clear description of what to accomplish and it will figure out how\n\
+             5. For web browsing/scraping tasks, use 'browser' agent\n\
+             6. For research/information gathering, use 'research' agent\n\
+             7. For coding/programming tasks, use 'code' agent\n\
+             8. For data processing/analysis, use 'data_analysis' agent\n\
+             9. For API integrations, use 'api' agent\n\
+             10. For deployment, use 'deploy' agent as the final step\n\n\
              Return a JSON array of steps. Each step has:\n\
-             - \"skill\": skill name (MUST be one from above)\n\
-             - \"description\": what this step accomplishes\n\
-             - \"input\": input object matching the skill's schema EXACTLY\n\n\
-             IMPORTANT:\n\
-             - Use EXACT field names from each skill's input schema\n\
-             - For 'code' skill: {{\"task\": \"description\", \"language\": \"python\"}}\n\
-             - For 'research' skill: {{\"query\": \"what to research\"}}\n\
-             - For 'browse' skill: {{\"task\": \"what to do\", \"url\": \"optional url\"}}\n\
-             - For 'file' skill: {{\"operation\": \"create|read|edit|list\", \"path\": \"...\", \"content\": \"...\"}}\n\
-             - For 'data_analysis' skill: {{\"task\": \"what to analyze\"}}\n\
-             - For 'shell' skill: {{\"command\": \"shell command\"}}\n\
-             - For 'deploy' skill: {{\"task\": \"what to deploy\"}}\n\n\
+             - \"skill\": agent name (MUST be one from the list above)\n\
+             - \"description\": a clear, detailed description of what this step should accomplish\n\n\
+             The description is the agent's goal — be specific about what output you expect.\n\
+             Do NOT include an \"input\" field; agents determine their own approach.\n\n\
              Return ONLY valid JSON array, no markdown fences, no explanation."
         );
 
@@ -370,149 +352,6 @@ impl Orchestrator {
         ]).await?;
 
         Self::parse_json_array(&plan_response)
-    }
-
-    /// Execute a single step with self-reflection and retry
-    async fn execute_step_with_reflection(
-        &self,
-        ctx: &SkillContext,
-        task_id: Uuid,
-        step_id: Uuid,
-        skill: &Arc<dyn crate::skills::Skill>,
-        mut input: Value,
-        step_index: usize,
-        skill_name: &str,
-        description: &str,
-    ) -> Result<crate::skills::SkillOutput, AppError> {
-        let mut attempt = 0u32;
-
-        loop {
-            match skill.execute(ctx, input.clone()).await {
-                Ok(output) if output.success => return Ok(output),
-                Ok(output) => {
-                    // Skill returned success=false (soft failure)
-                    attempt += 1;
-                    if attempt >= MAX_STEP_RETRIES {
-                        return Ok(output);
-                    }
-
-                    // Self-reflection: ask LLM what went wrong
-                    let reflection = self.reflect_on_failure(
-                        skill_name, description, &input, &output.result,
-                    ).await?;
-
-                    tracing::info!(
-                        task_id = ctx.task_id.as_str(),
-                        step = step_index + 1,
-                        attempt,
-                        "Self-reflection: {}",
-                        reflection.chars().take(200).collect::<String>()
-                    );
-
-                    self.emit(task_id, "step_reflection", json!({
-                        "step": step_index + 1,
-                        "attempt": attempt,
-                        "reflection": reflection.chars().take(500).collect::<String>(),
-                    })).await;
-
-                    db::set_step_reflection(&self.pool, step_id, &reflection, attempt as i32).await?;
-
-                    if let Some(obj) = input.as_object_mut() {
-                        obj.insert("_reflection".into(), json!(reflection));
-                        obj.insert("_retry_attempt".into(), json!(attempt));
-                        obj.insert("_previous_error".into(), output.result.clone());
-                    }
-                }
-                Err(e) => {
-                    attempt += 1;
-                    if attempt >= MAX_STEP_RETRIES {
-                        return Err(e);
-                    }
-
-                    let reflection = self.reflect_on_error(
-                        skill_name, description, &input, &e.to_string(),
-                    ).await.unwrap_or_else(|_| "Unable to reflect on error".to_string());
-
-                    self.emit(task_id, "step_reflection", json!({
-                        "step": step_index + 1,
-                        "attempt": attempt,
-                        "error": e.to_string(),
-                        "reflection": reflection.chars().take(500).collect::<String>(),
-                    })).await;
-
-                    db::set_step_reflection(&self.pool, step_id, &reflection, attempt as i32).await?;
-
-                    if let Some(obj) = input.as_object_mut() {
-                        obj.insert("_reflection".into(), json!(reflection));
-                        obj.insert("_retry_attempt".into(), json!(attempt));
-                        obj.insert("_previous_error".into(), json!(e.to_string()));
-                    }
-                }
-            }
-        }
-    }
-
-    /// Self-reflection: analyze why a step produced a soft failure
-    async fn reflect_on_failure(
-        &self,
-        skill_name: &str,
-        description: &str,
-        input: &Value,
-        output: &Value,
-    ) -> Result<String, AppError> {
-        let system = soul::system_prompt(
-            "You are a self-reflective AI agent analyzing a failed step. \
-             Identify what went wrong and suggest a concrete fix. Be brief and actionable.",
-            None,
-        );
-        let messages = vec![
-            ChatMessage {
-                role: "system".into(),
-                content: system,
-            },
-            ChatMessage {
-                role: "user".into(),
-                content: format!(
-                    "Skill: {skill_name}\nDescription: {description}\n\
-                     Input: {}\nOutput (failure): {}\n\n\
-                     What went wrong and how should we fix it?",
-                    serde_json::to_string_pretty(input).unwrap_or_default(),
-                    serde_json::to_string_pretty(output).unwrap_or_default(),
-                ),
-            },
-        ];
-        self.llm.fast(messages).await
-    }
-
-    /// Self-reflection: analyze why a step threw an error
-    async fn reflect_on_error(
-        &self,
-        skill_name: &str,
-        description: &str,
-        input: &Value,
-        error: &str,
-    ) -> Result<String, AppError> {
-        let system = soul::system_prompt(
-            "You are a self-reflective AI agent analyzing a step error. \
-             Identify the root cause and suggest a concrete fix. Be brief.",
-            None,
-        );
-        let messages = vec![
-            ChatMessage {
-                role: "system".into(),
-                content: system,
-            },
-            ChatMessage {
-                role: "user".into(),
-                content: format!(
-                    "Skill: {skill_name}\nDescription: {description}\n\
-                     Input: {}\nError: {error}\n\n\
-                     Root cause and fix?",
-                    serde_json::to_string_pretty(input).unwrap_or_default(),
-                ),
-            },
-        ];
-        self.llm.fast(messages).await
     }
 
     /// Adaptive re-planning when a step fails
@@ -553,16 +392,16 @@ impl Orchestrator {
             ))
             .collect();
 
-        let skill_list = self.skills.list_with_schema();
-        let skill_descriptions = skill_list.iter()
-            .map(|(name, desc, schema)| format!("- {name}: {desc}\n  Input schema: {schema}"))
+        let agent_list = self.agents.list();
+        let agent_descriptions = agent_list.iter()
+            .map(|(name, desc)| format!("- {name}: {desc}"))
             .collect::<Vec<_>>()
             .join("\n");
 
         let system = soul::system_prompt(
             "You are an adaptive re-planner. A step failed during task execution. \
              Create a NEW plan for the REMAINING work, taking into account what's already done.\n\
-             Return ONLY a JSON array of new steps (same format as original plan).\n\
+             Return ONLY a JSON array of new steps. Each step has \"skill\" (agent name) and \"description\".\n\
              Try a different approach for the failed step.",
             None,
         );
@@ -578,7 +417,7 @@ impl Orchestrator {
                      Completed steps:\n{completed}\n\n\
                      FAILED step: {failed_step_desc}\nError: {error}\n\n\
                      Remaining planned steps:\n{remaining}\n\n\
-                     Available skills:\n{skill_descriptions}\n\n\
+                     Available agents:\n{agent_descriptions}\n\n\
                      Create a new plan for the REMAINING work (different approach for the failed step).\n\
                      Return ONLY valid JSON array.",
                     completed = completed_summary.join("\n"),
