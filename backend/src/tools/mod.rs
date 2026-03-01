@@ -1,5 +1,4 @@
 mod click;
-mod delegate;
 mod extract;
 mod fill;
 mod http_request;
@@ -13,7 +12,6 @@ mod web_search;
 mod write_file;
 
 pub use click::ClickTool;
-pub use delegate::DelegateTool;
 pub use extract::ExtractTool;
 pub use fill::FillTool;
 pub use http_request::HttpRequestTool;

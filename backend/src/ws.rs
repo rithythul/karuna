@@ -30,7 +30,8 @@ async fn handle_socket(mut socket: WebSocket, task_id: Uuid, state: AppState) {
     // Forward events from Redis to WebSocket
     while let Some(event) = rx.recv().await {
         let is_terminal = event.event_type == "task_completed"
-            || event.event_type == "task_failed";
+            || event.event_type == "task_failed"
+            || event.event_type == "task_cancelled";
 
         let payload = serde_json::to_string(&event).unwrap_or_default();
         if socket.send(Message::Text(payload.into())).await.is_err() {

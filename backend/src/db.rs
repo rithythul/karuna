@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::models::{Artifact, Task, TaskEvent, TaskMemory, TaskStatus, TaskStep, UserMemory};
+use crate::models::{Artifact, Task, TaskEvent, TaskStatus, TaskStep, UserMemory};
 
 pub async fn create_task(pool: &PgPool, user_id: &str, goal: &str) -> Result<Task, AppError> {
     let task = sqlx::query_as::<_, Task>(
@@ -151,23 +151,6 @@ pub async fn get_task_events(pool: &PgPool, task_id: Uuid) -> Result<Vec<TaskEve
     Ok(events)
 }
 
-// --- Step reflection ---
-
-pub async fn set_step_reflection(
-    pool: &PgPool,
-    step_id: Uuid,
-    reflection: &str,
-    retry_count: i32,
-) -> Result<(), AppError> {
-    sqlx::query("UPDATE task_steps SET reflection = $1, retry_count = $2 WHERE id = $3")
-        .bind(reflection)
-        .bind(retry_count)
-        .bind(step_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 // --- Artifacts ---
 
 pub async fn create_artifact(
@@ -231,34 +214,6 @@ pub async fn set_memory(
     Ok(())
 }
 
-pub async fn get_memory(
-    pool: &PgPool,
-    task_id: Uuid,
-    key: &str,
-) -> Result<Option<TaskMemory>, AppError> {
-    let mem = sqlx::query_as::<_, TaskMemory>(
-        "SELECT * FROM task_memory WHERE task_id = $1 AND key = $2"
-    )
-    .bind(task_id)
-    .bind(key)
-    .fetch_optional(pool)
-    .await?;
-    Ok(mem)
-}
-
-pub async fn get_all_memory(
-    pool: &PgPool,
-    task_id: Uuid,
-) -> Result<Vec<TaskMemory>, AppError> {
-    let mems = sqlx::query_as::<_, TaskMemory>(
-        "SELECT * FROM task_memory WHERE task_id = $1 ORDER BY created_at"
-    )
-    .bind(task_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(mems)
-}
-
 // --- User Memory (cross-task) ---
 
 pub async fn set_user_memory(
@@ -280,23 +235,6 @@ pub async fn set_user_memory(
     .execute(pool)
     .await?;
     Ok(())
-}
-
-pub async fn get_user_memory(
-    pool: &PgPool,
-    user_id: &str,
-    category: &str,
-    key: &str,
-) -> Result<Option<UserMemory>, AppError> {
-    let mem = sqlx::query_as::<_, UserMemory>(
-        "SELECT * FROM user_memory WHERE user_id = $1 AND category = $2 AND key = $3"
-    )
-    .bind(user_id)
-    .bind(category)
-    .bind(key)
-    .fetch_optional(pool)
-    .await?;
-    Ok(mem)
 }
 
 pub async fn get_user_memories_by_category(

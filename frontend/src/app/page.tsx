@@ -1,46 +1,43 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/AuthProvider";
 
 const EXAMPLES = [
   {
-    icon: "🖥️",
-    title: "Build a web app",
-    prompt: "Build a Python Flask todo list web application with a SQLite database, REST API, and simple HTML frontend",
+    title: "Competitive landscape report",
+    prompt: "Research the top 5 competitors in the project management space. Compare their pricing, key features, funding, and recent news. Create a structured report with a comparison table and strategic recommendations.",
   },
   {
-    icon: "🔬",
-    title: "Research & report",
-    prompt: "Research the current state of quantum computing, including breakthroughs, key players, and practical applications. Create a comprehensive report.",
+    title: "Build & deploy a landing page",
+    prompt: "Build a modern, responsive landing page for a SaaS product called 'Beacon' — include a hero section with signup, feature highlights, pricing table, and testimonials. Deploy it and give me the live URL.",
   },
   {
-    icon: "📊",
-    title: "Analyze data",
-    prompt: "Create a dataset of 500 synthetic sales records, analyze trends by month and category, and generate chart visualizations",
+    title: "Market data dashboard",
+    prompt: "Fetch the latest cryptocurrency market data for the top 20 coins. Analyze 7-day price trends, trading volume, and market dominance. Generate charts and create an interactive HTML dashboard.",
   },
   {
-    icon: "🌐",
-    title: "Browse & extract",
-    prompt: "Go to news.ycombinator.com, extract the top 10 stories with titles, points, and URLs, and save as JSON",
+    title: "Deep research with citations",
+    prompt: "Research the current state of AI regulation across the US, EU, and China. Compare policy approaches, key legislation, enforcement mechanisms, and implications for startups. Produce a report with citations.",
   },
   {
-    icon: "⚡",
-    title: "Full-stack project",
-    prompt: "Create a React + Express weather dashboard that fetches from a public API and displays current conditions with charts",
+    title: "Automate a data pipeline",
+    prompt: "Write a Python pipeline that reads sales data from a CSV, cleans invalid records, computes monthly revenue trends and top products, generates visualizations, and exports everything as a formatted PDF report.",
   },
   {
-    icon: "🤖",
-    title: "Automate workflow",
-    prompt: "Write a Python script that monitors a directory for CSV files, validates data, generates statistics, and creates a summary report",
+    title: "Scrape, analyze & visualize",
+    prompt: "Go to Product Hunt, extract the top 50 products launched this month with their names, descriptions, upvotes, and categories. Analyze category distribution and trends, then create a summary report with charts.",
   },
 ];
 
 export default function Home() {
   const router = useRouter();
+  const { user, loading, login, logout } = useAuth();
   const [goal, setGoal] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const submitGoal = async (text: string) => {
     const trimmed = text.trim();
@@ -81,28 +78,84 @@ export default function Home() {
     }
   };
 
+  // Loading state while checking auth
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <svg className="animate-spin" width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke="var(--accent)" strokeWidth="2.5" strokeDasharray="31.416" strokeDashoffset="10" strokeLinecap="round"/>
+        </svg>
+      </div>
+    );
+  }
+
+  // Not logged in — show login page
+  if (!user) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center px-6">
+        <div className="relative w-full max-w-[480px] flex flex-col items-center gap-8">
+          <div className="text-center animate-fade-in-up">
+            <h1
+              className="text-[3.5rem] leading-[1.1] tracking-[-0.02em]"
+              style={{ fontFamily: "var(--font-display)" }}
+            >
+              Welcome to
+              <br />
+              <span style={{ color: "var(--accent)" }}>Karuna</span>
+            </h1>
+            <p className="mt-4 text-[14px]" style={{ color: "var(--text-tertiary)" }}>
+              Sign in with your KOOMPI ID to get started
+            </p>
+          </div>
+
+          <button
+            onClick={login}
+            className="flex items-center gap-3 rounded-xl px-6 py-3.5 text-[15px] font-medium transition-all duration-200 cursor-pointer animate-fade-in-up"
+            style={{
+              background: "var(--accent)",
+              color: "var(--text-on-accent)",
+              animationDelay: "100ms",
+            }}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+            </svg>
+            Sign in with KOOMPI KID
+          </button>
+        </div>
+
+        <div className="fixed bottom-0 left-0 right-0 flex justify-center py-5 text-[12px]"
+          style={{ color: "var(--text-tertiary)" }}>
+          Karuna
+        </div>
+      </div>
+    );
+  }
+
+  // Logged in — show main app
   return (
     <div className="flex min-h-screen flex-col items-center justify-center px-6">
-      <div
-        className="pointer-events-none fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
-        style={{
-          width: "800px",
-          height: "600px",
-          background: "radial-gradient(ellipse, rgba(212,160,74,0.04) 0%, transparent 70%)",
-        }}
-      />
+      {/* User menu — top right */}
+      <div className="fixed top-4 right-4 z-50 flex items-center gap-3 animate-fade-in-up">
+        <span className="text-[13px]" style={{ color: "var(--text-secondary)" }}>
+          {user.full_name}
+        </span>
+        <button
+          onClick={logout}
+          className="rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors cursor-pointer"
+          style={{
+            background: "var(--bg-raised)",
+            color: "var(--text-tertiary)",
+            border: "1px solid var(--border-subtle)",
+          }}
+        >
+          Sign out
+        </button>
+      </div>
 
       <div className="relative w-full max-w-[720px] flex flex-col items-center gap-10">
         {/* Branding */}
         <div className="text-center animate-fade-in-up">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-sm"
-            style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }}>
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75" style={{ background: "var(--accent)" }}></span>
-              <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: "var(--accent)" }}></span>
-            </span>
-            Autonomous AI Agent
-          </div>
           <h1
             className="text-[3.5rem] leading-[1.1] tracking-[-0.02em]"
             style={{ fontFamily: "var(--font-display)" }}
@@ -115,27 +168,25 @@ export default function Home() {
 
         {/* Input area */}
         <form onSubmit={handleSubmit} className="w-full animate-fade-in-up" style={{ animationDelay: "100ms" }}>
-          <div className="relative rounded-2xl transition-all duration-300"
-            style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}>
+          <div
+            className="relative rounded-2xl transition-all duration-300"
+            style={{
+              background: "var(--bg-raised)",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)",
+            }}
+          >
             <textarea
+              ref={textareaRef}
               value={goal}
               onChange={(e) => setGoal(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Describe your task..."
+              placeholder="Assign a task or ask anything"
               rows={3}
               disabled={isLoading}
               className="w-full bg-transparent px-5 pt-5 pb-14 text-[15px] leading-relaxed resize-none placeholder:text-[var(--text-tertiary)] focus:outline-none disabled:opacity-50"
               style={{ color: "var(--text-primary)" }}
             />
-            <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-4 pb-3.5">
-              <div className="flex items-center gap-1">
-                {["Research", "Code", "Browse", "Files", "Data", "Shell", "Deploy"].map((s) => (
-                  <span key={s} className="rounded-full px-2 py-0.5 text-[10px]"
-                    style={{ background: "var(--bg-elevated)", color: "var(--text-tertiary)", border: "1px solid var(--border-subtle)" }}>
-                    {s}
-                  </span>
-                ))}
-              </div>
+            <div className="absolute bottom-0 left-0 right-0 flex items-center justify-end px-4 pb-3.5">
               <button
                 type="submit"
                 disabled={!goal.trim() || isLoading}
@@ -161,23 +212,31 @@ export default function Home() {
 
         {/* Example prompts */}
         <div className="w-full animate-fade-in-up" style={{ animationDelay: "200ms" }}>
-          <p className="mb-3 text-center text-[12px]" style={{ color: "var(--text-tertiary)" }}>Try an example</p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+          <p className="mb-3 text-center text-[12px]" style={{ color: "var(--text-tertiary)" }}>Try something</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {EXAMPLES.map((ex) => (
               <button
                 key={ex.title}
-                onClick={() => submitGoal(ex.prompt)}
+                onClick={() => {
+                  setGoal(ex.prompt);
+                  textareaRef.current?.focus();
+                }}
                 disabled={isLoading}
-                className="group text-left rounded-xl p-3.5 transition-all duration-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--border-accent)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border-subtle)"; }}
+                className="rounded-lg px-3.5 py-2.5 text-[13px] text-left transition-all duration-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{
+                  color: "var(--text-secondary)",
+                  background: "var(--bg-elevated)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "var(--accent-dim)";
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "var(--text-secondary)";
+                  e.currentTarget.style.background = "var(--bg-elevated)";
+                }}
               >
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className="text-base">{ex.icon}</span>
-                  <span className="text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>{ex.title}</span>
-                </div>
-                <p className="text-[11px] line-clamp-2" style={{ color: "var(--text-tertiary)" }}>{ex.prompt}</p>
+                {ex.title}
               </button>
             ))}
           </div>
@@ -186,7 +245,7 @@ export default function Home() {
         {/* Error */}
         {error && (
           <div className="w-full rounded-xl px-4 py-3 text-[13px]"
-            style={{ background: "var(--status-error-dim)", border: "1px solid rgba(248,113,113,0.2)", color: "var(--status-error)" }}>
+            style={{ background: "var(--status-error-dim)", border: "1px solid rgba(220,38,38,0.2)", color: "var(--status-error)" }}>
             {error}
           </div>
         )}
@@ -194,7 +253,7 @@ export default function Home() {
 
       <div className="fixed bottom-0 left-0 right-0 flex justify-center py-5 text-[12px]"
         style={{ color: "var(--text-tertiary)" }}>
-        Karuna &middot; Autonomous AI Agent &middot; 7 Skills
+        Karuna
       </div>
     </div>
   );

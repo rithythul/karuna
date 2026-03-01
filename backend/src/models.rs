@@ -72,17 +72,6 @@ pub struct Artifact {
     pub created_at: DateTime<Utc>,
 }
 
-/// Persistent memory entry for a task (context across steps)
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct TaskMemory {
-    pub id: Uuid,
-    pub task_id: Uuid,
-    pub key: String,
-    pub value: serde_json::Value,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
 /// Cross-task memory entry for a user (persists across tasks)
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct UserMemory {

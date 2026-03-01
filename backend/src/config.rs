@@ -14,10 +14,20 @@ pub struct Config {
     pub sandbox_cpu_quota: i64,
     pub host: String,
     pub port: u16,
+    // KOOMPI KID OAuth
+    pub koompi_client_id: String,
+    pub koompi_client_secret: String,
+    pub koompi_redirect_uri: String,
+    pub public_url: String,
 }
 
 impl Config {
     pub fn from_env() -> Self {
+        let public_url = env::var("KARUNA_PUBLIC_URL")
+            .unwrap_or_else(|_| "http://localhost:3000".into());
+        let koompi_redirect_uri = env::var("KARUNA_KOOMPI_REDIRECT_URI")
+            .unwrap_or_else(|_| format!("{public_url}/auth/callback"));
+
         Self {
             database_url: env::var("KARUNA_DATABASE_URL")
                 .unwrap_or_else(|_| "postgresql://karuna:karuna@localhost:5432/karuna".into()),
@@ -41,6 +51,12 @@ impl Config {
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(50000),
             host: env::var("KARUNA_HOST").unwrap_or_else(|_| "0.0.0.0".into()),
             port: env::var("KARUNA_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(8000),
+            koompi_client_id: env::var("KARUNA_KOOMPI_CLIENT_ID")
+                .unwrap_or_default(),
+            koompi_client_secret: env::var("KARUNA_KOOMPI_CLIENT_SECRET")
+                .unwrap_or_default(),
+            koompi_redirect_uri,
+            public_url,
         }
     }
 }

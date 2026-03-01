@@ -1,39 +1,42 @@
 @import "tailwindcss";
 
 :root {
-  /* Surface */
-  --bg-deep: #08080a;
-  --bg-base: #0e0e11;
-  --bg-raised: #16161a;
-  --bg-elevated: #1e1e23;
-  --bg-hover: #25252b;
+  /* Surface — warm off-white */
+  --bg-deep: #f7f6f3;
+  --bg-base: #f0efec;
+  --bg-raised: #ffffff;
+  --bg-elevated: #f5f4f1;
+  --bg-hover: #eae9e6;
 
   /* Accent — warm amber */
-  --accent: #d4a04a;
-  --accent-dim: #b8893e;
-  --accent-glow: rgba(212, 160, 74, 0.15);
-  --accent-glow-strong: rgba(212, 160, 74, 0.25);
+  --accent: #c4932e;
+  --accent-dim: #a87d28;
+  --accent-glow: rgba(196, 147, 46, 0.10);
+  --accent-glow-strong: rgba(196, 147, 46, 0.18);
 
-  /* Text */
-  --text-primary: #ededef;
-  --text-secondary: #9d9da5;
-  --text-tertiary: #5e5e66;
-  --text-on-accent: #08080a;
+  /* Text — dark on light */
+  --text-primary: #1a1a1c;
+  --text-secondary: #6b6b73;
+  --text-tertiary: #9d9da5;
+  --text-on-accent: #ffffff;
 
   /* Status */
-  --status-success: #34d399;
-  --status-success-dim: rgba(52, 211, 153, 0.12);
-  --status-error: #f87171;
-  --status-error-dim: rgba(248, 113, 113, 0.12);
-  --status-running: #60a5fa;
-  --status-running-dim: rgba(96, 165, 250, 0.12);
-  --status-planning: #c084fc;
-  --status-planning-dim: rgba(192, 132, 252, 0.12);
+  --status-success: #16a34a;
+  --status-success-dim: rgba(22, 163, 74, 0.08);
+  --status-error: #dc2626;
+  --status-error-dim: rgba(220, 38, 38, 0.08);
+  --status-running: #2563eb;
+  --status-running-dim: rgba(37, 99, 235, 0.08);
+  --status-planning: #9333ea;
+  --status-planning-dim: rgba(147, 51, 234, 0.08);
+  --status-info: #2563eb;
+  --status-info-dim: rgba(37, 99, 235, 0.08);
 
-  /* Border */
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-default: rgba(255, 255, 255, 0.1);
-  --border-accent: rgba(212, 160, 74, 0.3);
+  /* Border — black-based for light theme */
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-default: rgba(0, 0, 0, 0.10);
+  --border-strong: rgba(0, 0, 0, 0.20);
+  --border-accent: rgba(196, 147, 46, 0.30);
 
   /* Fonts */
   --font-display: var(--font-instrument), Georgia, serif;
@@ -54,7 +57,7 @@
 
 html {
   background: var(--bg-deep);
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
@@ -93,23 +96,6 @@ body {
   outline-offset: 2px;
 }
 
-/* Noise texture overlay */
-.noise-bg::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  opacity: 0.03;
-  pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-  background-repeat: repeat;
-  background-size: 256px 256px;
-}
-
-/* Glow effect */
-.accent-glow {
-  box-shadow: 0 0 20px var(--accent-glow), 0 0 60px var(--accent-glow);
-}
 
 /* Animations */
 @keyframes pulse-ring {
@@ -136,7 +122,7 @@ body {
   background: linear-gradient(
     90deg,
     var(--bg-elevated) 25%,
-    var(--bg-hover) 50%,
+    var(--bg-deep) 50%,
     var(--bg-elevated) 75%
   );
   background-size: 200% 100%;

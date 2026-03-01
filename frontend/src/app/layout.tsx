@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { DM_Sans, JetBrains_Mono, Instrument_Serif } from "next/font/google";
+import { AuthProvider } from "@/components/AuthProvider";
 import "./globals.css";
 
 const dmSans = DM_Sans({
@@ -33,11 +34,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en">
       <body
-        className={`${dmSans.variable} ${jetbrainsMono.variable} ${instrumentSerif.variable} noise-bg`}
+        className={`${dmSans.variable} ${jetbrainsMono.variable} ${instrumentSerif.variable}`}
       >
-        <div className="relative z-10">{children}</div>
+        <AuthProvider>
+          <div className="relative z-10">{children}</div>
+        </AuthProvider>
       </body>
     </html>
   );

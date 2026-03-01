@@ -2,6 +2,8 @@
 
 Autonomous AI agent platform. Give Karuna a goal — it plans, executes, and delivers.
 
+A true agent would do: think about the goal → pick a tool → execute → observe result → decide next action → repeat until done. Each executor would be an autonomous reasoning loop, not a one-shot function call.  
+
 ## Architecture
 
 - **Backend**: Rust (Axum + Tokio) — REST API, WebSocket streaming, Redis job queue
