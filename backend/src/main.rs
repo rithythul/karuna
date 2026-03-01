@@ -10,6 +10,7 @@ mod redis_client;
 mod sandbox;
 mod skills;
 pub mod soul;
+mod tools;
 mod ws;
 
 use std::sync::Arc;

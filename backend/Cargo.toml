@@ -23,6 +23,9 @@ tokio-stream = "0.1"
 deadpool-redis = "0.23"
 redis = { version = "1", features = ["tokio-comp"] }
 async-trait = "0.1"
+base64 = "0.22"
+urlencoding = "2"
+tokio-util = "0.7"
 
 [dev-dependencies]
 axum-test = "19"
