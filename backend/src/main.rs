@@ -8,7 +8,6 @@ mod models;
 mod orchestrator;
 mod redis_client;
 mod sandbox;
-mod skills;
 pub mod soul;
 mod tools;
 mod agent_runtime;
