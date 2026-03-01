@@ -11,6 +11,7 @@ mod sandbox;
 mod skills;
 pub mod soul;
 mod tools;
+mod agent_runtime;
 mod ws;
 
 use std::sync::Arc;
