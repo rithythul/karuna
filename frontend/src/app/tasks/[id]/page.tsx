@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useState, useRef, useCallback } from "react";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import ArtifactViewer, { type Artifact } from "@/components/ArtifactViewer";
 import StepsSidebar from "@/components/StepsSidebar";
+import { useAuth } from "@/components/AuthProvider";
 
 interface TaskEvent {
   id?: string;
@@ -35,10 +36,167 @@ interface TaskData {
   total_duration_ms: number | null;
 }
 
-type ConnectionStatus = "connecting" | "live" | "completed" | "failed" | "disconnected";
+type ConnectionStatus = "connecting" | "live" | "completed" | "failed" | "disconnected" | "reconnecting";
+
+/* ─── Utilities ───────────────────────────────────── */
+
+async function fetchJson<T>(url: string, context: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`${context}: ${res.status} ${res.statusText}${body ? ` — ${body}` : ""}`);
+  }
+  return res.json();
+}
+
+function handleFetchError(context: string) {
+  return (err: unknown) => {
+    console.error(`[${context}]`, err instanceof Error ? err.message : err);
+  };
+}
+
+/** Convert known JSON step-result patterns into readable text */
+function formatStepResult(data: Record<string, unknown>): string {
+  const rp = data.result_preview;
+  if (typeof rp !== "string") return "";
+
+  // Try to parse as JSON for known patterns
+  try {
+    const parsed = JSON.parse(rp);
+    if (typeof parsed === "object" && parsed !== null) {
+      // File operations
+      if (parsed.operation && parsed.path) {
+        const op = String(parsed.operation);
+        const opVerb = op === "create" ? "Created" : op === "edit" ? "Edited" : op === "read" ? "Read" : op === "list" ? "Listed" : op.charAt(0).toUpperCase() + op.slice(1);
+        return `${opVerb} ${parsed.path}`;
+      }
+      // Shell commands
+      if (parsed.command) {
+        const cmd = String(parsed.command);
+        const exit = parsed.exit_code != null ? ` (exit ${parsed.exit_code})` : "";
+        const stdout = parsed.stdout ? `: ${String(parsed.stdout).trim().slice(0, 120)}` : "";
+        return `Ran \`${cmd}\`${exit}${stdout}`;
+      }
+      // Code generation
+      if (parsed.language && parsed.file) {
+        return `Generated ${parsed.language} code → ${parsed.file}`;
+      }
+      if (parsed.language) {
+        return `Generated ${parsed.language} code`;
+      }
+      // Research
+      if (parsed.summary) {
+        const s = String(parsed.summary);
+        return s.length > 200 ? s.slice(0, 200) + "..." : s;
+      }
+    }
+  } catch {
+    // Not JSON — use raw preview
+  }
+
+  // Fallback: truncate raw preview
+  return rp.length > 200 ? rp.slice(0, 200) + "..." : rp;
+}
+
+/** Strip markdown code fences from a string */
+function stripCodeFences(s: string): string {
+  const trimmed = s.trim();
+  if (trimmed.startsWith("```")) {
+    const lines = trimmed.split("\n");
+    const start = 1;
+    let end = lines.length;
+    for (let i = lines.length - 1; i > 0; i--) {
+      if (lines[i].startsWith("```")) {
+        end = i;
+        break;
+      }
+    }
+    return lines.slice(start, end).join("\n").trim();
+  }
+  return trimmed;
+}
+
+/* ─── WebSocket URL ──────────────────────────────── */
+
+function getWsUrl(taskId: string): string {
+  if (typeof window === "undefined") return "";
+  const envWs = process.env.NEXT_PUBLIC_BACKEND_WS_URL;
+  if (envWs) {
+    return `${envWs}/ws/tasks/${taskId}`;
+  }
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const host = process.env.NEXT_PUBLIC_BACKEND_HOST || "localhost:8000";
+  return `${protocol}//${host}/ws/tasks/${taskId}`;
+}
+
+/* ─── Event grouping for narrative timeline ──────── */
+
+interface StepGroup {
+  type: "step";
+  stepNumber: number;
+  skill: string;
+  description: string;
+  events: TaskEvent[];
+  status: "running" | "completed" | "failed" | "pending";
+}
+
+interface SystemEvent {
+  type: "system";
+  event: TaskEvent;
+}
+
+type TimelineEntry = StepGroup | SystemEvent;
+
+const SYSTEM_EVENTS = new Set([
+  "task_started", "planning", "plan_ready", "sandbox_ready",
+  "replanning", "replan_ready", "task_completed", "task_failed", "task_cancelled",
+]);
+
+function groupEventsByStep(events: TaskEvent[]): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+  let currentGroup: StepGroup | null = null;
+
+  for (const event of events) {
+    if (SYSTEM_EVENTS.has(event.event_type)) {
+      // Flush current step group
+      if (currentGroup) {
+        entries.push(currentGroup);
+        currentGroup = null;
+      }
+      entries.push({ type: "system", event });
+    } else if (event.event_type === "step_started") {
+      // Flush previous step group
+      if (currentGroup) {
+        entries.push(currentGroup);
+      }
+      currentGroup = {
+        type: "step",
+        stepNumber: Number(event.data.step) || 0,
+        skill: String(event.data.skill || ""),
+        description: String(event.data.description || ""),
+        events: [event],
+        status: "running",
+      };
+    } else if (currentGroup) {
+      currentGroup.events.push(event);
+      if (event.event_type === "step_completed") currentGroup.status = "completed";
+      if (event.event_type === "step_failed") currentGroup.status = "failed";
+    } else {
+      // Orphan event — show as system
+      entries.push({ type: "system", event });
+    }
+  }
+
+  if (currentGroup) entries.push(currentGroup);
+  return entries;
+}
+
+/* ─── Main Component ─────────────────────────────── */
 
 export default function TaskPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
+  const { user, loading: authLoading, logout } = useAuth();
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [task, setTask] = useState<TaskData | null>(null);
   const [steps, setSteps] = useState<TaskStep[]>([]);
@@ -51,6 +209,12 @@ export default function TaskPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [elapsed, setElapsed] = useState(0);
   const startTimeRef = useRef(Date.now());
+  const [cancelling, setCancelling] = useState(false);
+
+  // Reconnection state
+  const reconnectAttempt = useRef(0);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const MAX_RECONNECT_DELAY = 30000;
 
   // Timer
   useEffect(() => {
@@ -61,11 +225,23 @@ export default function TaskPage() {
     return () => clearInterval(interval);
   }, [status]);
 
+  // Refetch all task data (used on reconnect and terminal events)
+  const refetchAll = useCallback(() => {
+    if (!id) return;
+    fetchJson<{ task: TaskData; steps: TaskStep[]; artifacts: Artifact[] }>(`/api/tasks/${id}`, "refetch task")
+      .then((data) => {
+        if (data.task) setTask(data.task);
+        if (data.steps) setSteps(data.steps);
+        if (data.artifacts) setArtifacts(data.artifacts);
+      })
+      .catch(handleFetchError("refetchAll"));
+  }, [id]);
+
   // Fetch initial task data
   useEffect(() => {
     if (!id) return;
-    fetch(`/api/tasks/${id}`)
-      .then((res) => res.json())
+
+    fetchJson<{ task: TaskData; steps: TaskStep[]; artifacts: Artifact[] }>(`/api/tasks/${id}`, "initial task fetch")
       .then((data) => {
         if (data.task) setTask(data.task);
         if (data.steps) setSteps(data.steps);
@@ -78,36 +254,40 @@ export default function TaskPage() {
           setStatus("failed");
         }
       })
-      .catch(() => {});
+      .catch(handleFetchError("initial task"));
 
-    fetch(`/api/tasks/${id}/events`)
-      .then((res) => res.json())
-      .then((data: TaskEvent[]) => {
+    fetchJson<TaskEvent[]>(`/api/tasks/${id}/events`, "initial events fetch")
+      .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
           setEvents(data);
         }
       })
-      .catch(() => {});
+      .catch(handleFetchError("initial events"));
 
-    // Fetch artifacts
-    fetch(`/api/tasks/${id}/artifacts`)
-      .then((res) => res.json())
-      .then((data: Artifact[]) => {
+    fetchJson<Artifact[]>(`/api/tasks/${id}/artifacts`, "initial artifacts fetch")
+      .then((data) => {
         if (Array.isArray(data)) setArtifacts(data);
       })
-      .catch(() => {});
+      .catch(handleFetchError("initial artifacts"));
   }, [id]);
 
-  // WebSocket
-  useEffect(() => {
+  // WebSocket with reconnection
+  const connectWs = useCallback(() => {
     if (!id || terminalRef.current) return;
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//localhost:8000/ws/tasks/${id}`;
+    const wsUrl = getWsUrl(id);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => setStatus("live");
+    ws.onopen = () => {
+      setStatus("live");
+      reconnectAttempt.current = 0;
+
+      // Refetch on reconnect to catch missed events
+      if (reconnectAttempt.current > 0) {
+        refetchAll();
+      }
+    };
 
     ws.onmessage = (msg) => {
       try {
@@ -122,66 +302,82 @@ export default function TaskPage() {
 
         // Update steps on step events
         if (event.event_type === "step_completed" || event.event_type === "step_failed") {
-          fetch(`/api/tasks/${id}`)
-            .then((res) => res.json())
+          fetchJson<{ steps: TaskStep[]; artifacts: Artifact[] }>(`/api/tasks/${id}`, "step update")
             .then((data) => {
               if (data.steps) setSteps(data.steps);
               if (data.artifacts) setArtifacts(data.artifacts);
             })
-            .catch(() => {});
+            .catch(handleFetchError("step update"));
         }
 
         // Handle reflection events
         if (event.event_type === "step_reflection") {
-          fetch(`/api/tasks/${id}`)
-            .then((res) => res.json())
+          fetchJson<{ steps: TaskStep[] }>(`/api/tasks/${id}`, "reflection update")
             .then((data) => { if (data.steps) setSteps(data.steps); })
-            .catch(() => {});
+            .catch(handleFetchError("reflection update"));
         }
 
         // Handle replan events
         if (event.event_type === "replan_ready") {
-          fetch(`/api/tasks/${id}`)
-            .then((res) => res.json())
+          fetchJson<{ steps: TaskStep[] }>(`/api/tasks/${id}`, "replan update")
             .then((data) => { if (data.steps) setSteps(data.steps); })
-            .catch(() => {});
+            .catch(handleFetchError("replan update"));
         }
 
         const isCompleted = event.event_type === "task_completed";
         const isFailed = event.event_type === "task_failed";
+        const isCancelled = event.event_type === "task_cancelled";
 
-        if (isCompleted || isFailed) {
+        if (isCompleted || isFailed || isCancelled) {
           terminalRef.current = true;
           setStatus(isCompleted ? "completed" : "failed");
           setCurrentStep(null);
-          fetch(`/api/tasks/${id}`)
-            .then((res) => res.json())
-            .then((data) => {
-              if (data.task) setTask(data.task);
-              if (data.steps) setSteps(data.steps);
-              if (data.artifacts) setArtifacts(data.artifacts);
-            })
-            .catch(() => {});
-          // Final artifact fetch
-          fetch(`/api/tasks/${id}/artifacts`)
-            .then((res) => res.json())
-            .then((data: Artifact[]) => {
-              if (Array.isArray(data)) setArtifacts(data);
-            })
-            .catch(() => {});
+          setCancelling(false);
+          refetchAll();
         }
-      } catch {}
+      } catch (err) {
+        console.error("[ws:parse]", err);
+      }
     };
 
     ws.onclose = () => {
-      if (!terminalRef.current) setStatus("disconnected");
+      if (!terminalRef.current) {
+        scheduleReconnect();
+      }
     };
     ws.onerror = () => {
-      if (!terminalRef.current) setStatus("disconnected");
+      // onclose will fire after this
     };
 
-    return () => ws.close();
-  }, [id]);
+    return ws;
+  }, [id, refetchAll]);
+
+  // Reconnection scheduler with exponential backoff
+  const scheduleReconnect = useCallback(() => {
+    if (terminalRef.current) return;
+    setStatus("reconnecting");
+
+    const delay = Math.min(1000 * Math.pow(2, reconnectAttempt.current), MAX_RECONNECT_DELAY);
+    reconnectAttempt.current += 1;
+
+    reconnectTimer.current = setTimeout(() => {
+      if (!terminalRef.current) {
+        connectWs();
+        // Refetch to catch events missed while disconnected
+        refetchAll();
+      }
+    }, delay);
+  }, [connectWs, refetchAll]);
+
+  // Initial WebSocket connection
+  useEffect(() => {
+    if (!id || terminalRef.current) return;
+    const ws = connectWs();
+    return () => {
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      ws?.close();
+    };
+  }, [id, connectWs]);
 
   // Auto-scroll
   useEffect(() => {
@@ -207,11 +403,47 @@ export default function TaskPage() {
     }
   };
 
+  const handleCancel = async () => {
+    if (!id || cancelling) return;
+    setCancelling(true);
+    try {
+      const res = await fetch(`/api/tasks/${id}/cancel`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        console.error("[cancel]", body);
+        setCancelling(false);
+      }
+      // On success, the task_cancelled event will arrive via WS and update UI
+    } catch (err) {
+      console.error("[cancel]", err);
+      setCancelling(false);
+    }
+  };
+
   const completedSteps = steps.filter(
     (s) => s.status.toLowerCase() === "completed"
   ).length;
 
   const progressPct = steps.length > 0 ? (completedSteps / steps.length) * 100 : 0;
+  const canCancel = status === "live" || status === "connecting" || status === "reconnecting";
+
+  // Group events into narrative timeline
+  const timeline = groupEventsByStep(events);
+
+  // Auth gate
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center" style={{ background: "var(--bg-deep)" }}>
+        <svg className="animate-spin" width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke="var(--accent)" strokeWidth="2.5" strokeDasharray="31.416" strokeDashoffset="10" strokeLinecap="round"/>
+        </svg>
+      </div>
+    );
+  }
+  if (!user) {
+    router.replace("/");
+    return null;
+  }
 
   return (
     <div className="min-h-screen" style={{ background: "var(--bg-deep)" }}>
@@ -251,6 +483,31 @@ export default function TaskPage() {
         </div>
 
         <div className="flex items-center gap-4">
+          {/* Stop button */}
+          {canCancel && (
+            <button
+              onClick={handleCancel}
+              disabled={cancelling}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{
+                background: "var(--status-error-dim)",
+                border: "1px solid color-mix(in srgb, var(--status-error) 25%, transparent)",
+                color: "var(--status-error)",
+              }}
+            >
+              {cancelling ? (
+                <svg className="animate-spin" width="12" height="12" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" strokeDasharray="31.416" strokeDashoffset="10" strokeLinecap="round"/>
+                </svg>
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
+                </svg>
+              )}
+              {cancelling ? "Stopping..." : "Stop"}
+            </button>
+          )}
+
           {/* Progress mini-bar in header */}
           {steps.length > 0 && (
             <div className="flex items-center gap-2">
@@ -280,8 +537,35 @@ export default function TaskPage() {
           >
             {formatTime(elapsed)}
           </span>
+
+          {/* User */}
+          <div className="flex items-center gap-2 ml-2 pl-2" style={{ borderLeft: "1px solid var(--border-subtle)" }}>
+            <span className="text-[12px]" style={{ color: "var(--text-tertiary)" }}>
+              {user.full_name}
+            </span>
+            <button
+              onClick={logout}
+              className="rounded-md px-2 py-1 text-[11px] transition-colors cursor-pointer"
+              style={{ color: "var(--text-tertiary)", background: "var(--bg-elevated)" }}
+            >
+              Sign out
+            </button>
+          </div>
         </div>
       </header>
+
+      {/* Reconnecting banner */}
+      {status === "reconnecting" && (
+        <div
+          className="flex items-center justify-center gap-2 py-2 text-[12px]"
+          style={{ background: "var(--accent-glow)", color: "var(--accent)" }}
+        >
+          <svg className="animate-spin" width="12" height="12" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" strokeDasharray="31.416" strokeDashoffset="10" strokeLinecap="round"/>
+          </svg>
+          Reconnecting...
+        </div>
+      )}
 
       {/* Main two-column layout */}
       <div className="flex" style={{ minHeight: "calc(100vh - 52px)" }}>
@@ -356,7 +640,7 @@ export default function TaskPage() {
               ))}
             </div>
 
-            {/* Events tab */}
+            {/* Events tab — Narrative Timeline */}
             {activeTab === "events" && (
               <div className="mb-8">
                 {status === "live" && (
@@ -384,14 +668,26 @@ export default function TaskPage() {
                   </div>
                 ) : (
                   <div className="flex flex-col gap-0">
-                    {events.map((event, i) => (
-                      <EventRow
-                        key={event.id ?? `ws-${i}`}
-                        event={event}
-                        index={i}
-                        formatTimestamp={formatTimestamp}
-                      />
-                    ))}
+                    {timeline.map((entry, i) => {
+                      if (entry.type === "system") {
+                        return (
+                          <EventRow
+                            key={entry.event.id ?? `sys-${i}`}
+                            event={entry.event}
+                            index={i}
+                            formatTimestamp={formatTimestamp}
+                          />
+                        );
+                      }
+                      return (
+                        <StepBlock
+                          key={`step-${entry.stepNumber}-${i}`}
+                          group={entry}
+                          formatTimestamp={formatTimestamp}
+                          defaultOpen={entry.status === "running"}
+                        />
+                      );
+                    })}
                   </div>
                 )}
                 <div ref={bottomRef} />
@@ -406,7 +702,6 @@ export default function TaskPage() {
                     className="rounded-xl p-8 text-center"
                     style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}
                   >
-                    <span className="text-2xl block mb-2">📦</span>
                     <p className="text-[13px]" style={{ color: "var(--text-tertiary)" }}>
                       {status === "live" ? "Artifacts will appear here as they are created..." : "No artifacts produced for this task."}
                     </p>
@@ -428,7 +723,7 @@ export default function TaskPage() {
                 className="rounded-xl p-5 animate-fade-in-up"
                 style={{
                   background: "var(--status-error-dim)",
-                  border: "1px solid rgba(248,113,113,0.15)",
+                  border: "1px solid color-mix(in srgb, var(--status-error) 15%, transparent)",
                 }}
               >
                 <div className="flex items-center gap-2 mb-3">
@@ -444,7 +739,7 @@ export default function TaskPage() {
                 </div>
                 <pre
                   className="text-[13px] leading-relaxed font-mono whitespace-pre-wrap break-words"
-                  style={{ color: "rgba(248,113,113,0.8)" }}
+                  style={{ color: "var(--status-error)" }}
                 >
                   {task.error}
                 </pre>
@@ -490,6 +785,12 @@ function StatusPill({ status }: { status: ConnectionStatus }) {
       color: "var(--text-tertiary)",
       label: "Disconnected",
     },
+    reconnecting: {
+      bg: "var(--accent-glow)",
+      color: "var(--accent)",
+      dot: "var(--accent)",
+      label: "Reconnecting",
+    },
   };
   const c = config[status];
 
@@ -518,15 +819,118 @@ function StatusPill({ status }: { status: ConnectionStatus }) {
   );
 }
 
+/** Narrative step block — collapsible group of events for one step */
+function StepBlock({
+  group,
+  formatTimestamp,
+  defaultOpen,
+}: {
+  group: StepGroup;
+  formatTimestamp: (iso?: string) => string;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  // Auto-open when step starts running
+  useEffect(() => {
+    if (group.status === "running") setOpen(true);
+  }, [group.status]);
+
+  const statusConfig: Record<string, { color: string; icon: string }> = {
+    running: { color: "var(--status-running)", icon: "●" },
+    completed: { color: "var(--status-success)", icon: "✓" },
+    failed: { color: "var(--status-error)", icon: "✗" },
+    pending: { color: "var(--text-tertiary)", icon: "○" },
+  };
+  const cfg = statusConfig[group.status] || statusConfig.pending;
+
+  const skillIcons: Record<string, string> = {
+    code: "{ }",
+    browser: "🌐",
+    research: "🔍",
+    api: "🔌",
+    data_analysis: "📊",
+    deploy: "🚀",
+    // Keep old names as fallbacks
+    shell: ">_",
+    file: "📄",
+    browse: "🌐",
+  };
+  const skillIcon = skillIcons[group.skill] || "⚡";
+
+  return (
+    <div
+      className="mb-1 rounded-lg overflow-hidden animate-fade-in-up"
+      style={{
+        background: "var(--bg-raised)",
+        border: `1px solid ${group.status === "running" ? "var(--border-accent)" : "var(--border-subtle)"}`,
+      }}
+    >
+      {/* Header — always visible */}
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left cursor-pointer transition-colors"
+        style={{ background: open ? "var(--bg-elevated)" : "transparent" }}
+      >
+        <span className="text-[13px] shrink-0" style={{ color: cfg.color }}>
+          {cfg.icon}
+        </span>
+        <span className="text-[12px] shrink-0 font-mono" style={{ color: "var(--text-tertiary)" }}>
+          {skillIcon}
+        </span>
+        <span className="flex-1 min-w-0 text-[13px] font-medium truncate" style={{ color: "var(--text-primary)" }}>
+          Step {group.stepNumber}: {group.description}
+        </span>
+        <span
+          className="text-[10px] font-medium uppercase tracking-wider px-2 py-0.5 rounded-full shrink-0"
+          style={{ background: cfg.color + "20", color: cfg.color }}
+        >
+          {group.status}
+        </span>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="var(--text-tertiary)"
+          strokeWidth={2}
+          className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {/* Sub-events — collapsible */}
+      {open && (
+        <div className="px-4 pb-3">
+          {group.events.map((event, i) => (
+            <EventRow
+              key={event.id ?? `step-ev-${i}`}
+              event={event}
+              index={i}
+              formatTimestamp={formatTimestamp}
+              compact
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EventRow({
   event,
   index,
   formatTimestamp,
+  compact,
 }: {
   event: TaskEvent;
   index: number;
   formatTimestamp: (iso?: string) => string;
+  compact?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
+
   const typeConfig: Record<string, { color: string; icon: string }> = {
     task_started: { color: "var(--text-secondary)", icon: "▶" },
     planning: { color: "var(--status-planning)", icon: "◆" },
@@ -535,13 +939,20 @@ function EventRow({
     step_started: { color: "var(--status-running)", icon: "●" },
     step_completed: { color: "var(--status-success)", icon: "✓" },
     step_failed: { color: "var(--status-error)", icon: "✗" },
-    step_reflection: { color: "var(--accent)", icon: "💭" },
+    step_reflection: { color: "var(--accent)", icon: "↻" },
     step_warning: { color: "var(--accent)", icon: "⚠" },
     replanning: { color: "var(--status-planning)", icon: "↻" },
     replan_ready: { color: "var(--status-planning)", icon: "◆" },
-    artifact_created: { color: "var(--status-success)", icon: "📎" },
+    artifact_created: { color: "var(--status-success)", icon: "+" },
     task_completed: { color: "var(--status-success)", icon: "★" },
     task_failed: { color: "var(--status-error)", icon: "✗" },
+    task_cancelled: { color: "var(--status-error)", icon: "■" },
+    agent_started: { color: "var(--accent)", icon: "▸" },
+    agent_tool_call: { color: "var(--text-secondary)", icon: "⚙" },
+    agent_tool_result: { color: "var(--text-secondary)", icon: "↩" },
+    agent_delegating: { color: "var(--accent)", icon: "⤳" },
+    agent_completed: { color: "var(--status-success)", icon: "✓" },
+    agent_error: { color: "var(--status-error)", icon: "✗" },
   };
 
   const cfg = typeConfig[event.event_type] ?? {
@@ -555,14 +966,22 @@ function EventRow({
     .join(" ");
 
   const preview = getEventPreview(event);
+  const isExpandable = event.event_type === "step_completed"
+    || event.event_type === "step_failed"
+    || event.event_type === "step_reflection"
+    || event.event_type === "agent_completed"
+    || event.event_type === "agent_error"
+    || event.event_type === "agent_tool_result";
 
   return (
     <div
-      className="flex items-start gap-3 py-3 animate-fade-in-up"
+      className={`flex items-start gap-3 animate-fade-in-up ${isExpandable ? "cursor-pointer" : ""}`}
       style={{
-        borderBottom: "1px solid var(--border-subtle)",
+        borderBottom: compact ? "none" : "1px solid var(--border-subtle)",
+        padding: compact ? "6px 0" : "12px 0",
         animationDelay: `${Math.min(index * 30, 300)}ms`,
       }}
+      onClick={isExpandable ? () => setExpanded(!expanded) : undefined}
     >
       <span
         className="mt-0.5 text-[12px] shrink-0 w-5 text-center"
@@ -574,7 +993,7 @@ function EventRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-3">
           <span
-            className="text-[13px] font-medium"
+            className={`font-medium ${compact ? "text-[12px]" : "text-[13px]"}`}
             style={{ color: cfg.color }}
           >
             {label}
@@ -585,15 +1004,42 @@ function EventRow({
           >
             {formatTimestamp(event.created_at)}
           </span>
+          {isExpandable && (
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="var(--text-tertiary)"
+              strokeWidth={2}
+              className={`transition-transform ${expanded ? "rotate-180" : ""}`}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          )}
         </div>
 
         {preview && (
           <p
-            className="mt-1 text-[13px] leading-relaxed"
+            className={`mt-1 leading-relaxed ${compact ? "text-[12px]" : "text-[13px]"}`}
             style={{ color: "var(--text-secondary)" }}
           >
             {preview}
           </p>
+        )}
+
+        {/* Expanded detail for step events */}
+        {expanded && event.data && (
+          <pre
+            className="mt-2 p-3 rounded-lg text-[11px] font-mono overflow-auto max-h-[300px] whitespace-pre-wrap break-words"
+            style={{
+              background: "var(--bg-base)",
+              border: "1px solid var(--border-subtle)",
+              color: "var(--text-secondary)",
+            }}
+          >
+            {JSON.stringify(event.data, null, 2)}
+          </pre>
         )}
       </div>
     </div>
@@ -615,14 +1061,12 @@ function getEventPreview(event: TaskEvent): string | null {
       return d.description
         ? `Step ${d.step}/${d.total}: ${d.description}`
         : null;
-    case "step_completed": {
-      const rp = d.result_preview ? String(d.result_preview) : null;
-      return rp && rp.length > 160 ? rp.slice(0, 160) + "..." : rp;
-    }
+    case "step_completed":
+      return formatStepResult(d);
     case "step_failed":
       return d.error ? String(d.error) : null;
     case "step_reflection":
-      return d.reflection ? `🔍 ${String(d.reflection)}` : null;
+      return d.reflection ? String(d.reflection) : null;
     case "step_warning":
       return d.message ? String(d.message) : null;
     case "replanning":
@@ -635,18 +1079,71 @@ function getEventPreview(event: TaskEvent): string | null {
       return d.summary ? String(d.summary) : "All steps completed successfully";
     case "task_failed":
       return d.error ? String(d.error) : null;
+    case "task_cancelled":
+      return d.reason ? String(d.reason) : "Task cancelled";
+    case "agent_started":
+      return d.agent ? `Agent "${d.agent}" started${d.goal ? `: ${d.goal}` : ""}` : null;
+    case "agent_tool_call":
+      return d.display ? String(d.display) : d.tool ? `Using ${d.tool}` : null;
+    case "agent_tool_result":
+      return d.display ? String(d.display) : d.tool ? `${d.tool} completed` : null;
+    case "agent_delegating":
+      return d.child_agent ? `Delegating to ${d.child_agent}: ${d.sub_goal || ""}` : null;
+    case "agent_completed":
+      return d.output_preview ? String(d.output_preview) : d.agent ? `Agent "${d.agent}" finished (${d.turns_used || 0} turns)` : null;
+    case "agent_error":
+      return d.error ? `Agent error: ${d.error}` : null;
     default:
       return d.message ? String(d.message) : null;
   }
 }
 
+function safeString(val: unknown): string | null {
+  if (val == null) return null;
+  if (typeof val === "string") return val;
+  return JSON.stringify(val, null, 2);
+}
+
 function ResultBlock({ result }: { result: Record<string, unknown> }) {
-  const summary = result.summary ? String(result.summary) : null;
-  const output = result.output ? String(result.output) : null;
-  const keyOutputs = result.key_outputs as string[] | undefined;
-  const nextSteps = result.next_steps as string[] | undefined;
-  const code = result.code ? String(result.code) : null;
-  const language = result.language ? String(result.language) : null;
+  // Try to parse if result is a string (LLM sometimes wraps in code fences)
+  let parsed = result;
+  if (typeof result === "string") {
+    try {
+      parsed = JSON.parse(stripCodeFences(result as string));
+    } catch {
+      parsed = { summary: result };
+    }
+  }
+
+  const rawSummary = safeString(parsed.summary);
+  // Strip code fences from summary if the LLM wrapped it
+  const summary = rawSummary ? stripCodeFences(rawSummary) : null;
+  const output = safeString(parsed.output);
+
+  // Handle key_outputs that might be objects instead of strings
+  const keyOutputs = Array.isArray(parsed.key_outputs)
+    ? parsed.key_outputs.map((v) => {
+        if (typeof v === "string") return v;
+        if (typeof v === "object" && v !== null) {
+          // Try to make it readable
+          if ("path" in v && "operation" in v) {
+            return `${(v as Record<string, string>).operation}: ${(v as Record<string, string>).path}`;
+          }
+          if ("file" in v) return String((v as Record<string, string>).file);
+          if ("name" in v) return String((v as Record<string, string>).name);
+        }
+        return JSON.stringify(v);
+      })
+    : undefined;
+
+  const nextSteps = Array.isArray(parsed.next_steps)
+    ? parsed.next_steps.map((v) => (typeof v === "string" ? v : JSON.stringify(v)))
+    : undefined;
+  const code = safeString(parsed.code);
+  const language = safeString(parsed.language);
+
+  const hasStructured = summary || output || keyOutputs?.length || nextSteps?.length || code;
+  const fallback = !hasStructured ? JSON.stringify(parsed, null, 2) : null;
 
   return (
     <div className="animate-fade-in-up flex flex-col gap-4">
@@ -660,7 +1157,6 @@ function ResultBlock({ result }: { result: Record<string, unknown> }) {
           }}
         >
           <div className="flex items-center gap-2 mb-3">
-            <span className="text-[14px]">✨</span>
             <span
               className="text-[11px] font-medium uppercase tracking-[0.08em]"
               style={{ color: "var(--accent)" }}
@@ -748,7 +1244,7 @@ function ResultBlock({ result }: { result: Record<string, unknown> }) {
           </div>
           <pre
             className="p-4 text-[13px] leading-relaxed overflow-auto max-h-[400px] font-mono whitespace-pre-wrap break-words"
-            style={{ background: "var(--bg-raised)", color: "var(--text-secondary)" }}
+            style={{ background: "#1e1e23", color: "#d4d4d8" }}
           >
             {output}
           </pre>
@@ -777,9 +1273,38 @@ function ResultBlock({ result }: { result: Record<string, unknown> }) {
           </div>
           <pre
             className="p-4 text-[13px] leading-relaxed overflow-auto max-h-[400px] font-mono whitespace-pre"
-            style={{ background: "var(--bg-base)", color: "var(--text-secondary)" }}
+            style={{ background: "#1e1e23", color: "#d4d4d8" }}
           >
             {code}
+          </pre>
+        </div>
+      )}
+
+      {/* Fallback: raw JSON when no structured fields matched */}
+      {fallback && (
+        <div
+          className="rounded-xl overflow-hidden"
+          style={{ border: "1px solid var(--border-accent)" }}
+        >
+          <div
+            className="flex items-center gap-2 px-4 py-2.5"
+            style={{
+              background: "var(--accent-glow)",
+              borderBottom: "1px solid var(--border-accent)",
+            }}
+          >
+            <span
+              className="text-[11px] font-medium uppercase tracking-[0.08em]"
+              style={{ color: "var(--accent)" }}
+            >
+              Result
+            </span>
+          </div>
+          <pre
+            className="p-4 text-[13px] leading-relaxed overflow-auto max-h-[400px] font-mono whitespace-pre-wrap break-words"
+            style={{ background: "#1e1e23", color: "#d4d4d8" }}
+          >
+            {fallback}
           </pre>
         </div>
       )}

@@ -18,13 +18,16 @@ interface StepsSidebarProps {
 
 function skillIcon(skill: string): string {
   switch (skill) {
-    case "research": return "🔬";
+    case "browser": return "🌐";
     case "code": return "💻";
+    case "research": return "🔬";
+    case "api": return "🔌";
+    case "data_analysis": return "📊";
+    case "deploy": return "🚀";
+    // Legacy fallbacks
     case "browse": return "🌐";
     case "file": return "📁";
-    case "data_analysis": return "📊";
     case "shell": return "⚙️";
-    case "deploy": return "🚀";
     default: return "🔧";
   }
 }
