@@ -1,4 +1,5 @@
 mod api;
+mod auth;
 mod config;
 mod db;
 mod error;
@@ -8,6 +9,7 @@ mod orchestrator;
 mod redis_client;
 mod sandbox;
 mod skills;
+pub mod soul;
 mod ws;
 
 use std::sync::Arc;
@@ -39,6 +41,7 @@ async fn main() {
         .init();
 
     dotenvy::dotenv().ok();
+    soul::load("soul.md");
     let config = Config::from_env();
 
     let db = PgPoolOptions::new()
@@ -79,6 +82,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/ws/tasks/{id}", get(ws::ws_handler))
+        .merge(auth::routes())
         .merge(api::routes())
         .layer(cors)
         .with_state(state);

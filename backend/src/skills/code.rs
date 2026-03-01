@@ -4,6 +4,7 @@ use tracing::{info, warn};
 
 use crate::error::AppError;
 use crate::llm::ChatMessage;
+use crate::soul;
 use super::{Skill, SkillContext, SkillOutput};
 
 const MAX_RETRIES: u32 = 3;
@@ -71,14 +72,18 @@ impl CodeSkill {
         language: &str,
         error_context: Option<&str>,
     ) -> Result<String, AppError> {
+        let system = soul::system_prompt(
+            &format!(
+                "You are an expert {language} programmer. Write clean, working code \
+                 that solves the given task. Return ONLY the code, no markdown fences, \
+                 no explanation. The code must be complete and runnable as a single file."
+            ),
+            None,
+        );
         let mut messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: format!(
-                    "You are an expert {language} programmer. Write clean, working code \
-                     that solves the given task. Return ONLY the code, no markdown fences, \
-                     no explanation. The code must be complete and runnable as a single file."
-                ),
+                content: system,
             },
             ChatMessage {
                 role: "user".into(),

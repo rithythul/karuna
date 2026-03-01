@@ -1,16 +1,20 @@
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::db;
 use crate::error::AppError;
 use crate::llm::{ChatMessage, LlmClient};
-use crate::models::TaskStatus;
+use crate::models::{TaskStatus, UserMemory};
 use crate::redis_client::{RedisClient, TaskEvent};
 use crate::sandbox::SandboxManager;
 use crate::skills::{SkillContext, SkillRegistry};
+use crate::soul;
 
 const MAX_STEP_RETRIES: u32 = 3;
 
@@ -21,6 +25,7 @@ pub struct Orchestrator {
     sandbox: SandboxManager,
     skills: Arc<SkillRegistry>,
     redis: RedisClient,
+    cancellation_tokens: Arc<RwLock<HashMap<Uuid, CancellationToken>>>,
 }
 
 impl Orchestrator {
@@ -31,7 +36,39 @@ impl Orchestrator {
         skills: Arc<SkillRegistry>,
         redis: RedisClient,
     ) -> Self {
-        Self { pool, llm, sandbox, skills, redis }
+        Self {
+            pool, llm, sandbox, skills, redis,
+            cancellation_tokens: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Cancel a running task
+    pub async fn cancel_task(&self, task_id: Uuid) -> Result<(), AppError> {
+        let task = db::get_task(&self.pool, task_id).await?;
+        if !matches!(task.status, TaskStatus::Pending | TaskStatus::Planning | TaskStatus::Running) {
+            return Err(AppError::BadRequest(format!(
+                "Task is not cancellable (status: {:?})", task.status
+            )));
+        }
+
+        // Cancel the token if one exists
+        let tokens = self.cancellation_tokens.read().await;
+        if let Some(token) = tokens.get(&task_id) {
+            token.cancel();
+        }
+        drop(tokens);
+
+        // Update DB
+        db::set_task_error(&self.pool, task_id, "Cancelled by user").await?;
+        db::update_task_status(&self.pool, task_id, TaskStatus::Failed).await?;
+
+        // Emit cancellation event
+        self.emit(task_id, "task_cancelled", json!({"reason": "Cancelled by user"})).await;
+
+        // Clean up token
+        self.cancellation_tokens.write().await.remove(&task_id);
+
+        Ok(())
     }
 
     /// Enqueue a task for execution via Redis
@@ -67,15 +104,36 @@ impl Orchestrator {
 
     /// Execute a single task end-to-end with self-reflection and adaptive re-planning
     async fn execute_task(&self, task_id: Uuid) -> Result<(), AppError> {
+        let token = CancellationToken::new();
+        self.cancellation_tokens.write().await.insert(task_id, token.clone());
+
+        let result = self.execute_task_inner(task_id, &token).await;
+
+        // Clean up token
+        self.cancellation_tokens.write().await.remove(&task_id);
+
+        result
+    }
+
+    async fn execute_task_inner(&self, task_id: Uuid, token: &CancellationToken) -> Result<(), AppError> {
         let start = Instant::now();
         let task = db::get_task(&self.pool, task_id).await?;
         self.emit(task_id, "task_started", json!({"goal": task.goal})).await;
+
+        // Load cross-task user memory
+        let user_memories = db::get_all_user_memories(&self.pool, &task.user_id, 50).await
+            .unwrap_or_default();
+        let user_context = if user_memories.is_empty() {
+            None
+        } else {
+            Some(Self::format_user_memory(&user_memories))
+        };
 
         // Phase 1: Plan
         db::update_task_status(&self.pool, task_id, TaskStatus::Planning).await?;
         self.emit(task_id, "planning", json!({})).await;
 
-        let plan = self.create_plan(&task.goal).await?;
+        let plan = self.create_plan(&task.goal, user_context.as_deref()).await?;
 
         db::set_task_plan(&self.pool, task_id, json!(&plan)).await?;
         self.emit(task_id, "plan_ready", json!({"steps": plan.len()})).await;
@@ -104,6 +162,14 @@ impl Orchestrator {
         let current_plan = plan;
 
         for (i, step) in steps.iter().enumerate() {
+            // Check for cancellation before each step
+            if token.is_cancelled() {
+                let _ = self.sandbox.release(&container_id).await;
+                let duration = start.elapsed().as_millis() as i64;
+                let _ = db::set_task_duration(&self.pool, task_id, duration).await;
+                return Ok(());
+            }
+
             self.emit(task_id, "step_started", json!({
                 "step": i + 1,
                 "total": steps.len(),
@@ -137,6 +203,8 @@ impl Orchestrator {
                 sandbox: self.sandbox.clone(),
                 container_id: container_id.clone(),
                 task_id: task_id.to_string(),
+                user_id: task.user_id.clone(),
+                db: self.pool.clone(),
             };
 
             // Build input with context from previous steps
@@ -233,6 +301,13 @@ impl Orchestrator {
 
         db::set_task_result(&self.pool, task_id, final_result.clone()).await?;
 
+        // Phase 4: Extract learnings into cross-task memory
+        if let Err(e) = self.extract_learnings(&task.user_id, &task.goal, &final_result).await {
+            tracing::warn!("Failed to extract learnings: {e}");
+        } else {
+            self.emit(task_id, "learnings_stored", json!({"user_id": task.user_id})).await;
+        }
+
         let duration = start.elapsed().as_millis() as i64;
         let _ = db::set_task_duration(&self.pool, task_id, duration).await;
 
@@ -247,17 +322,20 @@ impl Orchestrator {
     }
 
     /// Create the initial execution plan
-    async fn create_plan(&self, goal: &str) -> Result<Vec<Value>, AppError> {
+    async fn create_plan(&self, goal: &str, user_context: Option<&str>) -> Result<Vec<Value>, AppError> {
         let skill_list = self.skills.list_with_schema();
         let skill_descriptions = skill_list.iter()
             .map(|(name, desc, schema)| format!("- {name}: {desc}\n  Input schema: {schema}"))
             .collect::<Vec<_>>()
             .join("\n");
 
+        let role_instructions = "You are a world-class autonomous AI agent planner. Your job is to decompose \
+             complex goals into a precise sequence of executable steps.";
+
+        let system = soul::system_prompt(role_instructions, user_context);
+
         let plan_prompt = format!(
-            "You are a world-class autonomous AI agent planner. Your job is to decompose \
-             complex goals into a precise sequence of executable steps.\n\n\
-             Goal: {goal}\n\n\
+            "Goal: {goal}\n\n\
              Available skills:\n{skill_descriptions}\n\n\
              PLANNING GUIDELINES:\n\
              1. Break the goal into the MINIMUM number of steps needed\n\
@@ -287,6 +365,7 @@ impl Orchestrator {
         );
 
         let plan_response = self.llm.plan(vec![
+            ChatMessage { role: "system".into(), content: system },
             ChatMessage { role: "user".into(), content: plan_prompt },
         ]).await?;
 
@@ -381,11 +460,15 @@ impl Orchestrator {
         input: &Value,
         output: &Value,
     ) -> Result<String, AppError> {
+        let system = soul::system_prompt(
+            "You are a self-reflective AI agent analyzing a failed step. \
+             Identify what went wrong and suggest a concrete fix. Be brief and actionable.",
+            None,
+        );
         let messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are a self-reflective AI agent analyzing a failed step. \
-                    Identify what went wrong and suggest a concrete fix. Be brief and actionable.".into(),
+                content: system,
             },
             ChatMessage {
                 role: "user".into(),
@@ -409,11 +492,15 @@ impl Orchestrator {
         input: &Value,
         error: &str,
     ) -> Result<String, AppError> {
+        let system = soul::system_prompt(
+            "You are a self-reflective AI agent analyzing a step error. \
+             Identify the root cause and suggest a concrete fix. Be brief.",
+            None,
+        );
         let messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are a self-reflective AI agent analyzing a step error. \
-                    Identify the root cause and suggest a concrete fix. Be brief.".into(),
+                content: system,
             },
             ChatMessage {
                 role: "user".into(),
@@ -472,13 +559,17 @@ impl Orchestrator {
             .collect::<Vec<_>>()
             .join("\n");
 
+        let system = soul::system_prompt(
+            "You are an adaptive re-planner. A step failed during task execution. \
+             Create a NEW plan for the REMAINING work, taking into account what's already done.\n\
+             Return ONLY a JSON array of new steps (same format as original plan).\n\
+             Try a different approach for the failed step.",
+            None,
+        );
         let messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are an adaptive re-planner. A step failed during task execution. \
-                    Create a NEW plan for the REMAINING work, taking into account what's already done.\n\
-                    Return ONLY a JSON array of new steps (same format as original plan).\n\
-                    Try a different approach for the failed step.".into(),
+                content: system,
             },
             ChatMessage {
                 role: "user".into(),
@@ -511,12 +602,16 @@ impl Orchestrator {
             .map(|(i, r)| format!("Step {}: {}", i + 1, r.to_string().chars().take(500).collect::<String>()))
             .collect();
 
+        let system = soul::system_prompt(
+            "You are a result synthesizer. Create a clear, structured summary of \
+             what was accomplished. Return a JSON object with:\n\
+             {\"summary\": \"brief overview\", \"key_outputs\": [\"...\"], \"artifacts\": [\"...\"], \"next_steps\": [\"...\"]}",
+            None,
+        );
         let messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are a result synthesizer. Create a clear, structured summary of \
-                    what was accomplished. Return a JSON object with:\n\
-                    {\"summary\": \"brief overview\", \"key_outputs\": [\"...\"], \"artifacts\": [\"...\"], \"next_steps\": [\"...\"]}".into(),
+                content: system,
             },
             ChatMessage {
                 role: "user".into(),
@@ -529,13 +624,104 @@ impl Orchestrator {
         ];
 
         let response = self.llm.fast(messages).await?;
-        let parsed: Value = serde_json::from_str(response.trim())
+        // Strip markdown code fences if present
+        let clean = response.trim();
+        let clean = if clean.starts_with("```") {
+            clean.lines()
+                .skip(1)
+                .take_while(|l| !l.starts_with("```"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            clean.to_string()
+        };
+        let parsed: Value = serde_json::from_str(&clean)
             .unwrap_or_else(|_| json!({
                 "summary": response,
                 "key_outputs": step_results.to_vec(),
                 "artifacts": artifacts,
             }));
         Ok(parsed)
+    }
+
+    /// Format user memories into a text block for inclusion in prompts.
+    fn format_user_memory(memories: &[UserMemory]) -> String {
+        let mut out = String::new();
+        let categories = ["preference", "fact", "learning"];
+        for cat in &categories {
+            let items: Vec<_> = memories.iter()
+                .filter(|m| m.category == *cat)
+                .take(20)
+                .collect();
+            if items.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("### {}\n", cat.to_uppercase()));
+            for m in items {
+                let value_str = match m.value.as_str() {
+                    Some(s) => s.to_string(),
+                    None => m.value.to_string(),
+                };
+                out.push_str(&format!("- **{}**: {}\n", m.key, value_str));
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Extract learnings from a completed task and store in user memory.
+    async fn extract_learnings(
+        &self,
+        user_id: &str,
+        goal: &str,
+        result: &Value,
+    ) -> Result<(), AppError> {
+        let system = soul::system_prompt(
+            "You extract reusable learnings from completed tasks. Return a JSON array of objects, \
+             each with {\"category\": \"preference|fact|learning\", \"key\": \"short_key\", \"value\": \"description\"}.\n\
+             Categories:\n\
+             - preference: user's style/format preferences observed from the task\n\
+             - fact: factual info about the user's domain, stack, or context\n\
+             - learning: what approach worked well and could help future tasks\n\n\
+             Return 0-5 items. Only include genuinely reusable insights, not task-specific details.\n\
+             Return ONLY valid JSON array.",
+            None,
+        );
+
+        let result_preview = result.to_string();
+        let result_preview = if result_preview.len() > 2000 {
+            &result_preview[..2000]
+        } else {
+            &result_preview
+        };
+
+        let messages = vec![
+            ChatMessage { role: "system".into(), content: system },
+            ChatMessage {
+                role: "user".into(),
+                content: format!(
+                    "Completed task goal: {goal}\n\nResult:\n{result_preview}\n\n\
+                     What reusable learnings can be extracted?"
+                ),
+            },
+        ];
+
+        let response = self.llm.fast(messages).await?;
+        let learnings: Vec<Value> = Self::parse_json_array(&response).unwrap_or_default();
+
+        for item in &learnings {
+            let category = item["category"].as_str().unwrap_or("learning");
+            let Some(key) = item["key"].as_str() else { continue };
+            let value = item.get("value").cloned().unwrap_or(json!(""));
+            db::set_user_memory(&self.pool, user_id, category, key, value).await?;
+        }
+
+        if !learnings.is_empty() {
+            db::prune_user_memories(&self.pool, user_id, 200).await?;
+            tracing::info!(user_id, count = learnings.len(), "Stored user learnings");
+        }
+
+        Ok(())
     }
 
     /// Parse a JSON array from LLM response, handling markdown fences

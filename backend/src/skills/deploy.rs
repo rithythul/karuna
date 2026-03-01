@@ -4,6 +4,7 @@ use tracing::info;
 
 use crate::error::AppError;
 use crate::llm::ChatMessage;
+use crate::soul;
 use super::{Skill, SkillContext, SkillOutput};
 
 /// Deploy skill: package artifacts and deploy simple web apps or static sites.
@@ -15,23 +16,26 @@ impl DeploySkill {
         task: &str,
         workspace_files: &str,
     ) -> Result<String, AppError> {
+        let system = soul::system_prompt(
+            "You are a deployment engineer. Generate a bash script that packages \
+             and deploys the project in /workspace.\n\n\
+             Options (choose the most appropriate):\n\
+             1. For static sites: create a tar.gz archive of the build output\n\
+             2. For Python apps: create a requirements.txt + start script\n\
+             3. For Node.js apps: ensure package.json + build + start script\n\
+             4. For any project: create a Dockerfile and docker-compose.yml\n\n\
+             Always:\n\
+             - Create a /workspace/deploy/ directory with all deployment artifacts\n\
+             - Create a /workspace/deploy/README.md with deployment instructions\n\
+             - Create a tar.gz archive at /workspace/deploy.tar.gz\n\
+             - Print a JSON summary of what was packaged to stdout\n\
+             - Return ONLY the bash script, no markdown fences",
+            None,
+        );
         let messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are a deployment engineer. Generate a bash script that packages \
-                    and deploys the project in /workspace.\n\n\
-                    Options (choose the most appropriate):\n\
-                    1. For static sites: create a tar.gz archive of the build output\n\
-                    2. For Python apps: create a requirements.txt + start script\n\
-                    3. For Node.js apps: ensure package.json + build + start script\n\
-                    4. For any project: create a Dockerfile and docker-compose.yml\n\n\
-                    Always:\n\
-                    - Create a /workspace/deploy/ directory with all deployment artifacts\n\
-                    - Create a /workspace/deploy/README.md with deployment instructions\n\
-                    - Create a tar.gz archive at /workspace/deploy.tar.gz\n\
-                    - Print a JSON summary of what was packaged to stdout\n\
-                    - Return ONLY the bash script, no markdown fences"
-                    .into(),
+                content: system,
             },
             ChatMessage {
                 role: "user".into(),

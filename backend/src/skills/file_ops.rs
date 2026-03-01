@@ -4,6 +4,7 @@ use tracing::info;
 
 use crate::error::AppError;
 use crate::llm::ChatMessage;
+use crate::soul;
 use super::{Skill, SkillContext, SkillOutput};
 
 /// File operations skill: create, read, edit, list, and delete files in the sandbox.
@@ -54,10 +55,14 @@ impl FileSkill {
         // If content is instructions rather than literal content, use LLM to generate
         let final_content = if content.len() < 50 && !content.contains('\n') && !path.ends_with(".txt") {
             // Looks like an instruction — generate actual file content
+            let system = soul::system_prompt(
+                "Generate the file content requested. Return ONLY the raw file content, no markdown fences, no explanation.",
+                None,
+            );
             let messages = vec![
                 ChatMessage {
                     role: "system".into(),
-                    content: "Generate the file content requested. Return ONLY the raw file content, no markdown fences, no explanation.".into(),
+                    content: system,
                 },
                 ChatMessage {
                     role: "user".into(),
@@ -135,11 +140,15 @@ impl FileSkill {
         let current_content = if current.exit_code == 0 { &current.stdout } else { "" };
 
         // Ask LLM to apply edits
+        let system = soul::system_prompt(
+            "You are a file editor. Apply the requested edits to the file content. \
+             Return ONLY the complete updated file content, no markdown fences, no explanation.",
+            None,
+        );
         let messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are a file editor. Apply the requested edits to the file content. \
-                    Return ONLY the complete updated file content, no markdown fences, no explanation.".into(),
+                content: system,
             },
             ChatMessage {
                 role: "user".into(),

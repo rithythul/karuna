@@ -11,6 +11,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use sqlx::PgPool;
+
 use crate::error::AppError;
 use crate::llm::LlmClient;
 use crate::sandbox::SandboxManager;
@@ -21,6 +23,8 @@ pub struct SkillContext {
     pub sandbox: SandboxManager,
     pub container_id: String,
     pub task_id: String,
+    pub user_id: String,
+    pub db: PgPool,
 }
 
 /// Result of a skill execution

@@ -4,6 +4,7 @@ use tracing::{info, warn};
 
 use crate::error::AppError;
 use crate::llm::ChatMessage;
+use crate::soul;
 use super::{Skill, SkillContext, SkillOutput};
 
 pub struct ResearchSkill;
@@ -14,14 +15,17 @@ impl ResearchSkill {
         ctx: &SkillContext,
         query: &str,
     ) -> Result<Vec<String>, AppError> {
+        let system = soul::system_prompt(
+            "You are a research assistant. Given a topic, generate exactly 3 \
+             diverse search queries that would help thoroughly research it. \
+             Return ONLY a JSON array of 3 strings, nothing else. \
+             Example: [\"query one\", \"query two\", \"query three\"]",
+            None,
+        );
         let messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are a research assistant. Given a topic, generate exactly 3 \
-                    diverse search queries that would help thoroughly research it. \
-                    Return ONLY a JSON array of 3 strings, nothing else. \
-                    Example: [\"query one\", \"query two\", \"query three\"]"
-                    .into(),
+                content: system,
             },
             ChatMessage {
                 role: "user".into(),
@@ -106,18 +110,21 @@ impl ResearchSkill {
             ));
         }
 
+        let system = soul::system_prompt(
+            "You are a research analyst. Synthesize the provided search results \
+             into a well-structured markdown report. Include:\n\
+             - An executive summary\n\
+             - Key findings organized by theme\n\
+             - Conclusions\n\
+             - Sources used\n\
+             Be thorough but concise. If the search results are empty or unhelpful, \
+             note that and provide what analysis you can based on the topic alone.",
+            None,
+        );
         let messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are a research analyst. Synthesize the provided search results \
-                    into a well-structured markdown report. Include:\n\
-                    - An executive summary\n\
-                    - Key findings organized by theme\n\
-                    - Conclusions\n\
-                    - Sources used\n\
-                    Be thorough but concise. If the search results are empty or unhelpful, \
-                    note that and provide what analysis you can based on the topic alone."
-                    .into(),
+                content: system,
             },
             ChatMessage {
                 role: "user".into(),

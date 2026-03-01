@@ -4,6 +4,7 @@ use tracing::{info, warn};
 
 use crate::error::AppError;
 use crate::llm::ChatMessage;
+use crate::soul;
 use super::{Skill, SkillContext, SkillOutput};
 
 /// Browser automation skill using Playwright in the sandbox.
@@ -23,22 +24,26 @@ impl BrowseSkill {
             .map(|e| format!("\n\nThe previous script failed with this error. Fix it:\n{e}"))
             .unwrap_or_default();
 
+        let system = soul::system_prompt(
+            &format!(
+                "You are an expert browser automation engineer using Python Playwright.\n\
+                 Write a complete, runnable Python script that performs the requested task.\n\n\
+                 Rules:\n\
+                 - Use `playwright.sync_api` (synchronous API)\n\
+                 - Launch Chromium in headless mode with `chromium.launch(headless=True)`\n\
+                 - Always take a screenshot at the end: `page.screenshot(path='/workspace/screenshot.png')`\n\
+                 - Print extracted data to stdout as JSON when extracting information\n\
+                 - Use `page.wait_for_load_state('networkidle')` after navigation\n\
+                 - Handle common popups/cookie banners by dismissing them\n\
+                 - Set a reasonable viewport: `browser.new_page(viewport={{'width': 1280, 'height': 720}})`\n\
+                 - Return ONLY the Python code, no markdown fences, no explanation"
+            ),
+            None,
+        );
         let messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: format!(
-                    "You are an expert browser automation engineer using Python Playwright.\n\
-                     Write a complete, runnable Python script that performs the requested task.\n\n\
-                     Rules:\n\
-                     - Use `playwright.sync_api` (synchronous API)\n\
-                     - Launch Chromium in headless mode with `chromium.launch(headless=True)`\n\
-                     - Always take a screenshot at the end: `page.screenshot(path='/workspace/screenshot.png')`\n\
-                     - Print extracted data to stdout as JSON when extracting information\n\
-                     - Use `page.wait_for_load_state('networkidle')` after navigation\n\
-                     - Handle common popups/cookie banners by dismissing them\n\
-                     - Set a reasonable viewport: `browser.new_page(viewport={{'width': 1280, 'height': 720}})`\n\
-                     - Return ONLY the Python code, no markdown fences, no explanation"
-                ),
+                content: system,
             },
             ChatMessage {
                 role: "user".into(),

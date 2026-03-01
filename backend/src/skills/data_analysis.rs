@@ -4,6 +4,7 @@ use tracing::{info, warn};
 
 use crate::error::AppError;
 use crate::llm::ChatMessage;
+use crate::soul;
 use super::{Skill, SkillContext, SkillOutput};
 
 /// Data analysis skill: process, analyze, and visualize data using Python.
@@ -23,20 +24,24 @@ impl DataAnalysisSkill {
             .map(|e| format!("\n\nPrevious attempt failed with this error. Fix it:\n{e}"))
             .unwrap_or_default();
 
+        let system = soul::system_prompt(
+            "You are an expert data analyst and Python programmer.\n\
+             Write a complete, runnable Python script that performs the requested analysis.\n\n\
+             Rules:\n\
+             - Use pandas for data manipulation\n\
+             - Use matplotlib/seaborn for visualizations, save to /workspace/ as PNG files\n\
+             - Use `plt.savefig('/workspace/chart_name.png', dpi=150, bbox_inches='tight')` — never `plt.show()`\n\
+             - Print a JSON summary of key findings to stdout\n\
+             - If creating sample/synthetic data, make it realistic\n\
+             - Save processed data to /workspace/ as CSV\n\
+             - Import all required libraries at the top\n\
+             - Return ONLY the Python code, no markdown fences, no explanation",
+            None,
+        );
         let messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: "You are an expert data analyst and Python programmer.\n\
-                    Write a complete, runnable Python script that performs the requested analysis.\n\n\
-                    Rules:\n\
-                    - Use pandas for data manipulation\n\
-                    - Use matplotlib/seaborn for visualizations, save to /workspace/ as PNG files\n\
-                    - Use `plt.savefig('/workspace/chart_name.png', dpi=150, bbox_inches='tight')` — never `plt.show()`\n\
-                    - Print a JSON summary of key findings to stdout\n\
-                    - If creating sample/synthetic data, make it realistic\n\
-                    - Save processed data to /workspace/ as CSV\n\
-                    - Import all required libraries at the top\n\
-                    - Return ONLY the Python code, no markdown fences, no explanation".into(),
+                content: system,
             },
             ChatMessage {
                 role: "user".into(),

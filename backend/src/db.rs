@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::models::{Artifact, Task, TaskEvent, TaskMemory, TaskStatus, TaskStep};
+use crate::models::{Artifact, Task, TaskEvent, TaskMemory, TaskStatus, TaskStep, UserMemory};
 
 pub async fn create_task(pool: &PgPool, user_id: &str, goal: &str) -> Result<Task, AppError> {
     let task = sqlx::query_as::<_, Task>(
@@ -257,6 +257,116 @@ pub async fn get_all_memory(
     .fetch_all(pool)
     .await?;
     Ok(mems)
+}
+
+// --- User Memory (cross-task) ---
+
+pub async fn set_user_memory(
+    pool: &PgPool,
+    user_id: &str,
+    category: &str,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO user_memory (user_id, category, key, value) VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (user_id, category, key) DO UPDATE SET \
+         value = EXCLUDED.value, access_count = user_memory.access_count + 1, updated_at = now()"
+    )
+    .bind(user_id)
+    .bind(category)
+    .bind(key)
+    .bind(&value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_user_memory(
+    pool: &PgPool,
+    user_id: &str,
+    category: &str,
+    key: &str,
+) -> Result<Option<UserMemory>, AppError> {
+    let mem = sqlx::query_as::<_, UserMemory>(
+        "SELECT * FROM user_memory WHERE user_id = $1 AND category = $2 AND key = $3"
+    )
+    .bind(user_id)
+    .bind(category)
+    .bind(key)
+    .fetch_optional(pool)
+    .await?;
+    Ok(mem)
+}
+
+pub async fn get_user_memories_by_category(
+    pool: &PgPool,
+    user_id: &str,
+    category: &str,
+    limit: i64,
+) -> Result<Vec<UserMemory>, AppError> {
+    let mems = sqlx::query_as::<_, UserMemory>(
+        "SELECT * FROM user_memory WHERE user_id = $1 AND category = $2 \
+         ORDER BY access_count DESC, updated_at DESC LIMIT $3"
+    )
+    .bind(user_id)
+    .bind(category)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(mems)
+}
+
+pub async fn get_all_user_memories(
+    pool: &PgPool,
+    user_id: &str,
+    limit: i64,
+) -> Result<Vec<UserMemory>, AppError> {
+    let mems = sqlx::query_as::<_, UserMemory>(
+        "SELECT * FROM user_memory WHERE user_id = $1 \
+         ORDER BY updated_at DESC LIMIT $2"
+    )
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(mems)
+}
+
+pub async fn delete_user_memory(
+    pool: &PgPool,
+    user_id: &str,
+    category: &str,
+    key: &str,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "DELETE FROM user_memory WHERE user_id = $1 AND category = $2 AND key = $3"
+    )
+    .bind(user_id)
+    .bind(category)
+    .bind(key)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn prune_user_memories(
+    pool: &PgPool,
+    user_id: &str,
+    max_entries: i64,
+) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        "DELETE FROM user_memory WHERE id IN (\
+           SELECT id FROM user_memory WHERE user_id = $1 \
+           ORDER BY access_count DESC, updated_at DESC \
+           OFFSET $2\
+         )"
+    )
+    .bind(user_id)
+    .bind(max_entries)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 // --- Task duration ---

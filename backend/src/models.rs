@@ -83,6 +83,19 @@ pub struct TaskMemory {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Cross-task memory entry for a user (persists across tasks)
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct UserMemory {
+    pub id: Uuid,
+    pub user_id: String,
+    pub category: String,
+    pub key: String,
+    pub value: serde_json::Value,
+    pub access_count: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateTaskRequest {
     pub goal: String,
