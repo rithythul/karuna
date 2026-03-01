@@ -1,9 +1,27 @@
+mod click;
+mod extract;
+mod fill;
+mod http_request;
+mod navigate;
 mod read_file;
+mod run_code;
 mod run_shell;
+mod screenshot;
+mod snapshot;
+mod web_search;
 mod write_file;
 
+pub use click::ClickTool;
+pub use extract::ExtractTool;
+pub use fill::FillTool;
+pub use http_request::HttpRequestTool;
+pub use navigate::NavigateTool;
 pub use read_file::ReadFileTool;
+pub use run_code::RunCodeTool;
 pub use run_shell::RunShellTool;
+pub use screenshot::ScreenshotTool;
+pub use snapshot::SnapshotTool;
+pub use web_search::WebSearchTool;
 pub use write_file::WriteFileTool;
 
 use async_trait::async_trait;
