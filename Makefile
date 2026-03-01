@@ -1,4 +1,4 @@
-.PHONY: setup dev build test clean infra sandbox
+.PHONY: setup dev build test clean infra sandbox check
 
 # Start PostgreSQL and Redis
 infra:
@@ -24,6 +24,10 @@ dev: infra
 build:
 	SQLX_OFFLINE=true cargo build --release
 	cd frontend && bun run build
+
+# Check compilation without building
+check:
+	SQLX_OFFLINE=true cargo check
 
 # Run tests
 test:
