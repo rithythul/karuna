@@ -12,6 +12,7 @@ mod skills;
 pub mod soul;
 mod tools;
 mod agent_runtime;
+mod agents;
 mod ws;
 
 use std::sync::Arc;
