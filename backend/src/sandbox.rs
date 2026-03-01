@@ -252,6 +252,10 @@ mod tests {
             sandbox_cpu_quota: 50000,
             host: "0.0.0.0".into(),
             port: 8000,
+            koompi_client_id: String::new(),
+            koompi_client_secret: String::new(),
+            koompi_redirect_uri: String::new(),
+            public_url: String::new(),
         }
     }
 
