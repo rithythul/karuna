@@ -379,15 +379,17 @@ impl Orchestrator {
                     let step_output = json!({"output": agent_result.output});
                     let artifacts = agent_result.artifacts.clone();
 
-                    // Store artifacts in DB
+                    // Store artifacts in DB — read content from sandbox before it's released
                     for artifact_path in &agent_result.artifacts {
                         let name = artifact_path.rsplit('/').next().unwrap_or(artifact_path);
                         let artifact_type = Self::infer_artifact_type(name);
                         let mime = Self::infer_mime_type(name);
+                        let content: Option<String> = sandbox_handle.read_file(artifact_path).await.ok();
+                        let size = content.as_ref().map(|c| c.len() as i64);
                         let _ = db::create_artifact(
                             &self.pool, task_id, Some(step.id),
                             name, &artifact_type, Some(&mime),
-                            Some(artifact_path), None, None, None,
+                            Some(artifact_path), content.as_deref(), None, size,
                         ).await;
                     }
 
