@@ -474,17 +474,18 @@ impl Orchestrator {
              PLANNING GUIDELINES:\n\
              1. Break the goal into the MINIMUM number of steps needed\n\
              2. Assign the most appropriate agent for each step\n\
-             3. Steps execute sequentially — later agents can build on earlier results\n\
-             4. Each agent is autonomous: give it a clear description of what to accomplish and it will figure out how\n\
-             5. For web browsing/scraping tasks, use 'browser' agent\n\
-             6. For research/information gathering, use 'research' agent\n\
-             7. For coding/programming tasks, use 'code' agent\n\
-             8. For data processing/analysis, use 'data_analysis' agent\n\
-             9. For API integrations, use 'api' agent\n\
-             10. For deployment, use 'deploy' agent as the final step\n\n\
+             3. Each agent is autonomous: give it a clear description of what to accomplish and it will figure out how\n\
+             4. For web browsing/scraping tasks, use 'browser' agent\n\
+             5. For research/information gathering, use 'research' agent\n\
+             6. For coding/programming tasks, use 'code' agent\n\
+             7. For data processing/analysis, use 'data_analysis' agent\n\
+             8. For API integrations, use 'api' agent\n\
+             9. For deployment, use 'deploy' agent as the final step\n\
+             10. Steps with no dependencies can run IN PARALLEL — only add dependencies where one step genuinely needs the output of another\n\n\
              Return a JSON array of steps. Each step has:\n\
              - \"skill\": agent name (MUST be one from the list above)\n\
-             - \"description\": a clear, detailed description of what this step should accomplish\n\n\
+             - \"description\": a clear, detailed description of what this step should accomplish\n\
+             - \"depends_on\": array of 0-based step indices this step depends on (use [] if independent)\n\n\
              The description is the agent's goal — be specific about what output you expect.\n\
              Do NOT include an \"input\" field; agents determine their own approach.\n\n\
              Return ONLY valid JSON array, no markdown fences, no explanation."
