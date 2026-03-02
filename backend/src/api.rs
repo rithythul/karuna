@@ -18,6 +18,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/tasks/{id}/events", get(get_task_events))
         .route("/api/tasks/{id}/artifacts", get(get_task_artifacts))
         .route("/api/tasks/{id}/cancel", post(cancel_task))
+        .route("/api/tasks/{id}/steps/{step_id}/reasoning", get(get_step_reasoning))
         .route("/api/memory", get(list_user_memories))
         .route("/api/memory/{category}", get(list_user_memories_by_category))
         .route("/api/memory/{category}/{key}", delete(delete_user_memory))
@@ -81,6 +82,15 @@ async fn get_task_artifacts(
 ) -> Result<Json<Vec<crate::models::Artifact>>, AppError> {
     let artifacts = db::get_task_artifacts(&state.db, id).await?;
     Ok(Json(artifacts))
+}
+
+async fn get_step_reasoning(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+    Path((task_id, step_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Vec<crate::models::ReasoningTrace>>, AppError> {
+    let traces = db::get_reasoning_traces(&state.db, task_id, Some(step_id)).await?;
+    Ok(Json(traces))
 }
 
 async fn cancel_task(
