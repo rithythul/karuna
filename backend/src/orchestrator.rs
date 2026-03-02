@@ -815,3 +815,182 @@ impl Orchestrator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_json_array ──────────────────────────
+
+    #[test]
+    fn parse_json_array_plain() {
+        let input = r#"[{"skill": "code", "description": "write code"}]"#;
+        let result = Orchestrator::parse_json_array(input).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["skill"], "code");
+    }
+
+    #[test]
+    fn parse_json_array_with_markdown_fences() {
+        let input = "```json\n[{\"skill\": \"browser\", \"description\": \"browse\"}]\n```";
+        let result = Orchestrator::parse_json_array(input).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["skill"], "browser");
+    }
+
+    #[test]
+    fn parse_json_array_with_whitespace() {
+        let input = "  \n  [{\"skill\": \"research\"}]  \n  ";
+        let result = Orchestrator::parse_json_array(input).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn parse_json_array_invalid_json() {
+        let input = "not json at all";
+        assert!(Orchestrator::parse_json_array(input).is_err());
+    }
+
+    #[test]
+    fn parse_json_array_empty() {
+        let result = Orchestrator::parse_json_array("[]").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_json_array_multi_step() {
+        let input = r#"[
+            {"skill": "research", "description": "find data", "depends_on": []},
+            {"skill": "code", "description": "process data", "depends_on": [0]},
+            {"skill": "deploy", "description": "deploy", "depends_on": [1]}
+        ]"#;
+        let result = Orchestrator::parse_json_array(input).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[1]["depends_on"][0], 0);
+        assert_eq!(result[2]["depends_on"][0], 1);
+    }
+
+    // ── infer_artifact_type ───────────────────────
+
+    #[test]
+    fn infer_artifact_type_screenshot() {
+        assert_eq!(Orchestrator::infer_artifact_type("result.png"), "screenshot");
+        assert_eq!(Orchestrator::infer_artifact_type("PHOTO.JPG"), "screenshot");
+    }
+
+    #[test]
+    fn infer_artifact_type_code() {
+        assert_eq!(Orchestrator::infer_artifact_type("main.py"), "code");
+        assert_eq!(Orchestrator::infer_artifact_type("index.ts"), "code");
+    }
+
+    #[test]
+    fn infer_artifact_type_data() {
+        assert_eq!(Orchestrator::infer_artifact_type("output.csv"), "data");
+        assert_eq!(Orchestrator::infer_artifact_type("config.json"), "data");
+    }
+
+    #[test]
+    fn infer_artifact_type_report() {
+        assert_eq!(Orchestrator::infer_artifact_type("README.md"), "report");
+    }
+
+    #[test]
+    fn infer_artifact_type_unknown() {
+        assert_eq!(Orchestrator::infer_artifact_type("binary.dat"), "file");
+    }
+
+    // ── infer_mime_type ───────────────────────────
+
+    #[test]
+    fn infer_mime_type_common() {
+        assert_eq!(Orchestrator::infer_mime_type("img.png"), "image/png");
+        assert_eq!(Orchestrator::infer_mime_type("style.css"), "text/css");
+        assert_eq!(Orchestrator::infer_mime_type("data.json"), "application/json");
+        assert_eq!(Orchestrator::infer_mime_type("unknown.xyz"), "application/octet-stream");
+    }
+
+    // ── dependency graph logic ────────────────────
+
+    #[test]
+    fn dependency_graph_parsing() {
+        let plan: Vec<Value> = vec![
+            json!({"skill": "research", "depends_on": []}),
+            json!({"skill": "code", "depends_on": [0]}),
+            json!({"skill": "deploy", "depends_on": [0, 1]}),
+        ];
+
+        let deps: Vec<Vec<usize>> = plan.iter().map(|s| {
+            s["depends_on"].as_array()
+                .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
+                .unwrap_or_default()
+        }).collect();
+
+        assert_eq!(deps[0], Vec::<usize>::new());
+        assert_eq!(deps[1], vec![0]);
+        assert_eq!(deps[2], vec![0, 1]);
+    }
+
+    #[test]
+    fn ready_step_filter_logic() {
+        let deps = vec![
+            vec![],       // step 0: no deps
+            vec![0],      // step 1: depends on 0
+            vec![0, 1],   // step 2: depends on 0 and 1
+        ];
+        let total_steps = 3;
+
+        // Initially: only step 0 is ready
+        let completed: HashSet<usize> = HashSet::new();
+        let failed: HashSet<usize> = HashSet::new();
+        let ready: Vec<usize> = (0..total_steps)
+            .filter(|i| !completed.contains(i) && !failed.contains(i))
+            .filter(|i| !deps[*i].iter().any(|d| failed.contains(d)))
+            .filter(|i| deps[*i].iter().all(|d| completed.contains(d)))
+            .collect();
+        assert_eq!(ready, vec![0]);
+
+        // After step 0 completes: step 1 is ready
+        let mut completed: HashSet<usize> = HashSet::new();
+        completed.insert(0);
+        let failed: HashSet<usize> = HashSet::new();
+        let ready: Vec<usize> = (0..total_steps)
+            .filter(|i| !completed.contains(i) && !failed.contains(i))
+            .filter(|i| !deps[*i].iter().any(|d| failed.contains(d)))
+            .filter(|i| deps[*i].iter().all(|d| completed.contains(d)))
+            .collect();
+        assert_eq!(ready, vec![1]);
+
+        // If step 0 fails: steps 1 and 2 should NOT be ready (blocked by failed dep)
+        let completed: HashSet<usize> = HashSet::new();
+        let mut failed: HashSet<usize> = HashSet::new();
+        failed.insert(0);
+        let ready: Vec<usize> = (0..total_steps)
+            .filter(|i| !completed.contains(i) && !failed.contains(i))
+            .filter(|i| !deps[*i].iter().any(|d| failed.contains(d)))
+            .filter(|i| deps[*i].iter().all(|d| completed.contains(d)))
+            .collect();
+        assert!(ready.is_empty(), "No steps should be ready when dep 0 failed");
+    }
+
+    #[test]
+    fn parallel_independent_steps() {
+        let deps = vec![
+            vec![],  // step 0: no deps
+            vec![],  // step 1: no deps
+            vec![],  // step 2: no deps
+        ];
+        let total_steps = 3;
+        let completed: HashSet<usize> = HashSet::new();
+        let failed: HashSet<usize> = HashSet::new();
+
+        let ready: Vec<usize> = (0..total_steps)
+            .filter(|i| !completed.contains(i) && !failed.contains(i))
+            .filter(|i| !deps[*i].iter().any(|d| failed.contains(d)))
+            .filter(|i| deps[*i].iter().all(|d| completed.contains(d)))
+            .collect();
+
+        // All 3 steps should be ready in parallel
+        assert_eq!(ready, vec![0, 1, 2]);
+    }
+}

@@ -644,3 +644,33 @@ impl AgentRuntime {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_timeout_browser_tools() {
+        assert_eq!(AgentRuntime::tool_timeout("navigate"), Duration::from_secs(120));
+        assert_eq!(AgentRuntime::tool_timeout("click"), Duration::from_secs(120));
+        assert_eq!(AgentRuntime::tool_timeout("fill"), Duration::from_secs(120));
+        assert_eq!(AgentRuntime::tool_timeout("extract"), Duration::from_secs(120));
+        assert_eq!(AgentRuntime::tool_timeout("snapshot"), Duration::from_secs(120));
+        assert_eq!(AgentRuntime::tool_timeout("screenshot"), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn tool_timeout_code_execution() {
+        assert_eq!(AgentRuntime::tool_timeout("run_code"), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn tool_timeout_defaults() {
+        assert_eq!(AgentRuntime::tool_timeout("run_shell"), Duration::from_secs(60));
+        assert_eq!(AgentRuntime::tool_timeout("read_file"), Duration::from_secs(60));
+        assert_eq!(AgentRuntime::tool_timeout("write_file"), Duration::from_secs(60));
+        assert_eq!(AgentRuntime::tool_timeout("web_search"), Duration::from_secs(60));
+        assert_eq!(AgentRuntime::tool_timeout("http_request"), Duration::from_secs(60));
+        assert_eq!(AgentRuntime::tool_timeout("delegate"), Duration::from_secs(60));
+    }
+}

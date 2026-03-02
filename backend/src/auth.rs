@@ -364,3 +364,38 @@ async fn dev_seed(
         Json(serde_json::json!({ "user": user })),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_cookie_dev_mode() {
+        let cookie = session_cookie("abc123", true);
+        assert!(cookie.contains("hanuman_session=abc123"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Lax"));
+        assert!(!cookie.contains("Secure"), "Dev mode should not have Secure flag");
+    }
+
+    #[test]
+    fn session_cookie_production() {
+        let cookie = session_cookie("abc123", false);
+        assert!(cookie.contains("hanuman_session=abc123"));
+        assert!(cookie.contains("; Secure"), "Production should have Secure flag");
+    }
+
+    #[test]
+    fn clear_cookie_dev_mode() {
+        let cookie = clear_cookie(true);
+        assert!(cookie.contains("Max-Age=0"));
+        assert!(!cookie.contains("Secure"));
+    }
+
+    #[test]
+    fn clear_cookie_production() {
+        let cookie = clear_cookie(false);
+        assert!(cookie.contains("Max-Age=0"));
+        assert!(cookie.contains("; Secure"));
+    }
+}
