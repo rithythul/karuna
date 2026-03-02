@@ -32,8 +32,10 @@ Goal → Orchestrator → [Agent₁, Agent₂, ...] → Result
 ```
 
 - **Backend** — Rust (Axum + Tokio). REST API, WebSocket streaming, Redis job queue.
-- **Frontend** — Next.js + TypeScript + Tailwind CSS. Real-time task view with reasoning traces.
-- **Orchestrator** — LLM-powered planner decomposes goals into agent steps and dispatches them.
+- **Frontend** — Next.js + TypeScript + Tailwind CSS. Real-time task view with reasoning traces. Dark mode.
+- **Orchestrator** — LLM-powered planner decomposes goals into dependency-aware steps, dispatches them in parallel via `tokio::JoinSet`.
+- **Reliability** — LLM retry with exponential backoff, tool execution timeouts, step-level retry with reflection.
+- **Visibility** — Every agent thought, tool call, and observation persisted as reasoning traces. Viewable per-step in the frontend.
 - **LLM** — OpenRouter (model-agnostic: Claude, GPT, Gemini, Llama).
 - **Sandboxes** — Pre-warmed Docker containers with browser automation (agent-browser + Chromium), Python data science stack, and Node.js.
 - **Queue** — Redis FIFO queue + Pub/Sub for horizontal scaling.
@@ -49,7 +51,7 @@ Goal → Orchestrator → [Agent₁, Agent₂, ...] → Result
 | `data_analysis` | Analyze data, create visualizations, generate reports |
 | `deploy` | Package and deploy applications |
 
-Each agent gets a system prompt, a set of tools, and runs autonomously inside a sandboxed Docker container. The LLM picks tools via OpenRouter's tool-calling API, the runtime executes them, and observations feed back to the LLM until the goal is met.
+Each agent gets a system prompt, a set of tools, and runs autonomously inside a sandboxed Docker container. The LLM picks tools via OpenRouter's tool-calling API, the runtime executes them, and observations feed back to the LLM until the goal is met. Agents can delegate sub-tasks to other specialist agents (max depth 3).
 
 ## Quick Start
 
@@ -72,17 +74,21 @@ Backend: http://localhost:8000 | Frontend: http://localhost:3000
 ## API
 
 ```
-POST /api/tasks                — Submit a goal
-GET  /api/tasks                — List all tasks
-GET  /api/tasks/{id}           — Task status + steps
-GET  /api/tasks/{id}/events    — Event log
-GET  /api/tasks/{id}/artifacts — Generated artifacts
-POST /api/tasks/{id}/cancel    — Cancel a running task
-GET  /api/skills               — List available agents
-GET  /api/status               — System status (queue, pool, agents)
-GET  /api/memory               — List user memories
-WS   /ws/tasks/{id}            — Live event stream
-GET  /health                   — Health check
+POST /api/tasks                                       — Submit a goal
+GET  /api/tasks                                       — List all tasks
+GET  /api/tasks/{id}                                  — Task status + steps + artifacts
+GET  /api/tasks/{id}/events                           — Event log
+GET  /api/tasks/{id}/artifacts                        — Generated artifacts
+GET  /api/tasks/{id}/artifacts/{aid}/content           — Download artifact content
+GET  /api/tasks/{id}/steps/{sid}/reasoning            — Agent reasoning traces
+POST /api/tasks/{id}/cancel                           — Cancel a running task
+GET  /api/skills                                      — List available agents
+GET  /api/status                                      — System status (queue, pool, agents)
+GET  /api/memory                                      — List user memories
+GET  /api/memory/{category}                           — Memories by category
+DELETE /api/memory/{category}/{key}                   — Delete a memory
+WS   /ws/tasks/{id}                                   — Live event stream
+GET  /health                                          — Health check
 ```
 
 ## Development
