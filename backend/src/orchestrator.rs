@@ -226,6 +226,8 @@ impl Orchestrator {
                     &task_id_str,
                     &self.redis,
                     0,
+                    &self.pool,
+                    Some(step.id),
                 ).await;
 
                 match result {
@@ -364,6 +366,8 @@ impl Orchestrator {
                                     &task_id_str,
                                     &self.redis,
                                     0,
+                                    &self.pool,
+                                    Some(new_step.id),
                                 ).await;
 
                                 match replan_result {

@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::models::{Artifact, Task, TaskEvent, TaskStatus, TaskStep, UserMemory};
+use crate::models::{Artifact, ReasoningTrace, Task, TaskEvent, TaskStatus, TaskStep, UserMemory};
 
 pub async fn create_task(pool: &PgPool, user_id: &str, goal: &str) -> Result<Task, AppError> {
     let task = sqlx::query_as::<_, Task>(
@@ -359,4 +359,59 @@ pub async fn set_step_error(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+// --- Reasoning Traces ---
+
+pub async fn insert_reasoning_trace(
+    pool: &PgPool,
+    task_id: Uuid,
+    step_id: Option<Uuid>,
+    agent_name: &str,
+    turn: i32,
+    role: &str,
+    content: Option<&str>,
+    tool_calls: Option<serde_json::Value>,
+) -> Result<ReasoningTrace, AppError> {
+    let trace = sqlx::query_as::<_, ReasoningTrace>(
+        "INSERT INTO reasoning_traces (task_id, step_id, agent_name, turn, role, content, tool_calls) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *"
+    )
+    .bind(task_id)
+    .bind(step_id)
+    .bind(agent_name)
+    .bind(turn)
+    .bind(role)
+    .bind(content)
+    .bind(&tool_calls)
+    .fetch_one(pool)
+    .await?;
+    Ok(trace)
+}
+
+pub async fn get_reasoning_traces(
+    pool: &PgPool,
+    task_id: Uuid,
+    step_id: Option<Uuid>,
+) -> Result<Vec<ReasoningTrace>, AppError> {
+    let traces = match step_id {
+        Some(sid) => {
+            sqlx::query_as::<_, ReasoningTrace>(
+                "SELECT * FROM reasoning_traces WHERE task_id = $1 AND step_id = $2 ORDER BY turn"
+            )
+            .bind(task_id)
+            .bind(sid)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<_, ReasoningTrace>(
+                "SELECT * FROM reasoning_traces WHERE task_id = $1 ORDER BY turn"
+            )
+            .bind(task_id)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    Ok(traces)
 }

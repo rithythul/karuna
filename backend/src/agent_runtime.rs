@@ -6,10 +6,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use sqlx::PgPool;
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 use tokio::time::timeout;
 
+use crate::db;
 use crate::error::AppError;
 use crate::llm::{LlmClient, LlmResponse, ToolDefinition};
 use crate::redis_client::{RedisClient, TaskEvent};
@@ -139,9 +142,12 @@ impl AgentRuntime {
         task_id: &'a str,
         redis: &'a RedisClient,
         depth: u32,
+        pool: &'a PgPool,
+        step_id: Option<Uuid>,
     ) -> Pin<Box<dyn Future<Output = Result<AgentResult, AppError>> + Send + 'a>> {
         Box::pin(async move {
         let agent_name = agent.name().to_string();
+        let task_uuid = Uuid::parse_str(task_id).ok();
 
         // Emit agent_started event
         self.emit(redis, task_id, "agent_started", json!({
@@ -206,6 +212,14 @@ impl AgentRuntime {
                     }))
                     .await;
 
+                    // Persist assistant text trace
+                    if let Some(tid) = task_uuid {
+                        let _ = db::insert_reasoning_trace(
+                            pool, tid, step_id, &agent_name,
+                            turns as i32, "assistant", Some(&text), None,
+                        ).await;
+                    }
+
                     return Ok(AgentResult {
                         output: text,
                         artifacts,
@@ -236,6 +250,15 @@ impl AgentRuntime {
                         "content": null
                     }));
 
+                    // Persist assistant tool-call trace
+                    if let Some(tid) = task_uuid {
+                        let _ = db::insert_reasoning_trace(
+                            pool, tid, step_id, &agent_name,
+                            turns as i32, "assistant", None,
+                            Some(json!(tc_values)),
+                        ).await;
+                    }
+
                     // Process each tool call
                     for tc in &tool_calls {
                         let tool_name = &tc.function.name;
@@ -262,20 +285,29 @@ impl AgentRuntime {
                             .await;
 
                             match self
-                                .handle_delegation(tc, sandbox, task_id, redis, depth)
+                                .handle_delegation(tc, sandbox, task_id, redis, depth, pool, step_id)
                                 .await
                             {
                                 Ok(result) => {
                                     artifacts.extend(result.artifacts.clone());
 
+                                    let delegate_content = serde_json::to_string(&json!({
+                                        "output": result.output,
+                                        "artifacts": result.artifacts,
+                                    })).unwrap_or_default();
                                     messages.push(json!({
                                         "role": "tool",
                                         "tool_call_id": tool_call_id,
-                                        "content": serde_json::to_string(&json!({
-                                            "output": result.output,
-                                            "artifacts": result.artifacts,
-                                        })).unwrap_or_default()
+                                        "content": &delegate_content
                                     }));
+
+                                    // Persist tool result trace
+                                    if let Some(tid) = task_uuid {
+                                        let _ = db::insert_reasoning_trace(
+                                            pool, tid, step_id, &agent_name,
+                                            turns as i32, "tool", Some(&delegate_content), None,
+                                        ).await;
+                                    }
                                 }
                                 Err(e) => {
                                     warn!(
@@ -284,11 +316,20 @@ impl AgentRuntime {
                                         error = %e,
                                         "Delegation failed"
                                     );
+                                    let err_content = format!("Delegation failed: {e}");
                                     messages.push(json!({
                                         "role": "tool",
                                         "tool_call_id": tool_call_id,
-                                        "content": format!("Delegation failed: {e}")
+                                        "content": &err_content
                                     }));
+
+                                    // Persist tool result trace
+                                    if let Some(tid) = task_uuid {
+                                        let _ = db::insert_reasoning_trace(
+                                            pool, tid, step_id, &agent_name,
+                                            turns as i32, "tool", Some(&err_content), None,
+                                        ).await;
+                                    }
                                 }
                             }
                         } else {
@@ -337,8 +378,16 @@ impl AgentRuntime {
                                             messages.push(json!({
                                                 "role": "tool",
                                                 "tool_call_id": tool_call_id,
-                                                "content": output_str
+                                                "content": &output_str
                                             }));
+
+                                            // Persist tool result trace
+                                            if let Some(tid) = task_uuid {
+                                                let _ = db::insert_reasoning_trace(
+                                                    pool, tid, step_id, &agent_name,
+                                                    turns as i32, "tool", Some(&output_str), None,
+                                                ).await;
+                                            }
                                         }
                                         Ok(Err(e)) => {
                                             self.emit(
@@ -353,11 +402,20 @@ impl AgentRuntime {
                                             )
                                             .await;
 
+                                            let err_content = format!("Tool error: {e}");
                                             messages.push(json!({
                                                 "role": "tool",
                                                 "tool_call_id": tool_call_id,
-                                                "content": format!("Tool error: {e}")
+                                                "content": &err_content
                                             }));
+
+                                            // Persist tool result trace
+                                            if let Some(tid) = task_uuid {
+                                                let _ = db::insert_reasoning_trace(
+                                                    pool, tid, step_id, &agent_name,
+                                                    turns as i32, "tool", Some(&err_content), None,
+                                                ).await;
+                                            }
                                         }
                                         Err(_elapsed) => {
                                             warn!(
@@ -383,15 +441,24 @@ impl AgentRuntime {
                                             )
                                             .await;
 
+                                            let timeout_content = format!(
+                                                "Tool '{}' timed out after {}s. Try a different approach.",
+                                                tool_name,
+                                                tool_timeout.as_secs()
+                                            );
                                             messages.push(json!({
                                                 "role": "tool",
                                                 "tool_call_id": tool_call_id,
-                                                "content": format!(
-                                                    "Tool '{}' timed out after {}s. Try a different approach.",
-                                                    tool_name,
-                                                    tool_timeout.as_secs()
-                                                )
+                                                "content": &timeout_content
                                             }));
+
+                                            // Persist tool result trace
+                                            if let Some(tid) = task_uuid {
+                                                let _ = db::insert_reasoning_trace(
+                                                    pool, tid, step_id, &agent_name,
+                                                    turns as i32, "tool", Some(&timeout_content), None,
+                                                ).await;
+                                            }
                                         }
                                     }
                                 }
@@ -401,11 +468,20 @@ impl AgentRuntime {
                                         tool = tool_name.as_str(),
                                         "Unknown tool requested by agent"
                                     );
+                                    let unknown_content = format!("Unknown tool: {tool_name}");
                                     messages.push(json!({
                                         "role": "tool",
                                         "tool_call_id": tool_call_id,
-                                        "content": format!("Unknown tool: {tool_name}")
+                                        "content": &unknown_content
                                     }));
+
+                                    // Persist tool result trace
+                                    if let Some(tid) = task_uuid {
+                                        let _ = db::insert_reasoning_trace(
+                                            pool, tid, step_id, &agent_name,
+                                            turns as i32, "tool", Some(&unknown_content), None,
+                                        ).await;
+                                    }
                                 }
                             }
                         }
@@ -480,6 +556,8 @@ impl AgentRuntime {
         task_id: &str,
         redis: &RedisClient,
         depth: u32,
+        pool: &PgPool,
+        step_id: Option<Uuid>,
     ) -> Result<AgentResult, AppError> {
         // Enforce max delegation depth
         if depth >= 3 {
@@ -515,7 +593,7 @@ impl AgentRuntime {
         );
 
         // Run the child agent recursively with the same sandbox (shared container)
-        self.run(&child_agent, sub_goal, sandbox, task_id, redis, depth + 1)
+        self.run(&child_agent, sub_goal, sandbox, task_id, redis, depth + 1, pool, step_id)
             .await
     }
 

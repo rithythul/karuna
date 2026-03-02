@@ -85,6 +85,20 @@ pub struct UserMemory {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A single message from the agent's think-act-observe loop, persisted for observability.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ReasoningTrace {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub step_id: Option<Uuid>,
+    pub agent_name: String,
+    pub turn: i32,
+    pub role: String,
+    pub content: Option<String>,
+    pub tool_calls: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateTaskRequest {
     pub goal: String,
