@@ -203,84 +203,224 @@ impl Orchestrator {
                 }
             };
 
-            // Run the agent with the step description as its goal
-            let result = self.runtime.run(
-                &agent,
-                &step.description,
-                &sandbox_handle,
-                &task_id_str,
-                &self.redis,
-                0,
-            ).await;
+            // Retry loop: up to 3 attempts (1 initial + 2 retries)
+            const MAX_ATTEMPTS: usize = 3;
+            let mut last_error: Option<AppError> = None;
 
-            match result {
-                Ok(agent_result) => {
-                    let step_output = json!({"output": agent_result.output});
-                    step_results.push(step_output.clone());
-                    all_artifacts.extend(agent_result.artifacts.clone());
+            for attempt in 0..MAX_ATTEMPTS {
+                // Build goal: on retry, prepend reflection about previous failure
+                let goal = if attempt == 0 {
+                    step.description.clone()
+                } else {
+                    let err_msg = last_error.as_ref().map(|e| e.to_string()).unwrap_or_default();
+                    format!(
+                        "IMPORTANT: Previous attempt failed with: {}. Try a completely different approach.\n\nOriginal task: {}",
+                        err_msg, step.description
+                    )
+                };
 
-                    // Store artifacts in DB
-                    for artifact_path in &agent_result.artifacts {
-                        let name = artifact_path.rsplit('/').next().unwrap_or(artifact_path);
-                        let artifact_type = Self::infer_artifact_type(name);
-                        let mime = Self::infer_mime_type(name);
-                        let _ = db::create_artifact(
-                            &self.pool, task_id, Some(step.id),
-                            name, &artifact_type, Some(&mime),
-                            Some(artifact_path), None, None, None,
-                        ).await;
-                    }
+                let result = self.runtime.run(
+                    &agent,
+                    &goal,
+                    &sandbox_handle,
+                    &task_id_str,
+                    &self.redis,
+                    0,
+                ).await;
 
-                    db::update_step_status(&self.pool, step.id, TaskStatus::Completed).await?;
-                    self.emit(task_id, "step_completed", json!({
-                        "step": i + 1,
-                        "skill": step.skill,
-                        "artifacts": agent_result.artifacts,
-                        "result_preview": agent_result.output.chars().take(500).collect::<String>(),
-                        "turns_used": agent_result.turns_used,
-                    })).await;
-                    db::add_task_event(&self.pool, task_id, "step_completed",
-                        json!({"step": i + 1, "skill": step.skill})).await?;
+                match result {
+                    Ok(agent_result) => {
+                        let step_output = json!({"output": agent_result.output});
+                        step_results.push(step_output.clone());
+                        all_artifacts.extend(agent_result.artifacts.clone());
 
-                    // Update memory with latest result
-                    db::set_memory(&self.pool, task_id, &format!("step_{}_result", i + 1),
-                        step_output).await?;
-                }
-                Err(e) => {
-                    db::update_step_status(&self.pool, step.id, TaskStatus::Failed).await?;
-                    self.emit(task_id, "step_failed", json!({
-                        "step": i + 1,
-                        "error": e.to_string(),
-                    })).await;
+                        // Store artifacts in DB
+                        for artifact_path in &agent_result.artifacts {
+                            let name = artifact_path.rsplit('/').next().unwrap_or(artifact_path);
+                            let artifact_type = Self::infer_artifact_type(name);
+                            let mime = Self::infer_mime_type(name);
+                            let _ = db::create_artifact(
+                                &self.pool, task_id, Some(step.id),
+                                name, &artifact_type, Some(&mime),
+                                Some(artifact_path), None, None, None,
+                            ).await;
+                        }
 
-                    // Try adaptive re-planning for remaining steps
-                    if i < steps.len() - 1 {
-                        self.emit(task_id, "replanning", json!({
-                            "reason": format!("Step {} ({}) failed: {}", i + 1, step.skill, e),
+                        db::update_step_status(&self.pool, step.id, TaskStatus::Completed).await?;
+                        self.emit(task_id, "step_completed", json!({
+                            "step": i + 1,
+                            "skill": step.skill,
+                            "artifacts": agent_result.artifacts,
+                            "result_preview": agent_result.output.chars().take(500).collect::<String>(),
+                            "turns_used": agent_result.turns_used,
                         })).await;
+                        db::add_task_event(&self.pool, task_id, "step_completed",
+                            json!({"step": i + 1, "skill": step.skill})).await?;
 
-                        match self.replan(
-                            &task.goal, &current_plan, &step_results, i, &e.to_string(),
-                        ).await {
-                            Ok(_new_plan) => {
-                                self.emit(task_id, "replan_ready", json!({
-                                    "new_steps": _new_plan.len(),
-                                })).await;
-                                continue;
-                            }
-                            Err(replan_err) => {
-                                tracing::error!("Re-planning failed: {replan_err}");
-                            }
+                        // Update memory with latest result
+                        db::set_memory(&self.pool, task_id, &format!("step_{}_result", i + 1),
+                            step_output).await?;
+
+                        last_error = None;
+                        break;
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        db::set_step_error(&self.pool, step.id, &err_str).await?;
+
+                        if attempt < MAX_ATTEMPTS - 1 {
+                            // Not the last attempt — record retry info and try again
+                            let retry_count = db::increment_step_retry(&self.pool, step.id).await?;
+                            let reflection = format!(
+                                "Attempt {} failed: {}. Retrying with different approach.",
+                                attempt + 1, err_str
+                            );
+                            db::set_step_reflection(&self.pool, step.id, &reflection).await?;
+
+                            self.emit(task_id, "step_retrying", json!({
+                                "step": i + 1,
+                                "attempt": attempt + 1,
+                                "max_attempts": MAX_ATTEMPTS,
+                                "retry_count": retry_count,
+                                "error": err_str,
+                            })).await;
+
+                            last_error = Some(e);
+                            // continue to next attempt
+                        } else {
+                            // Final attempt exhausted
+                            last_error = Some(e);
                         }
                     }
-
-                    db::set_task_error(&self.pool, task_id, &e.to_string()).await?;
-                    let _ = self.sandbox.release(&container_id).await;
-                    let duration = start.elapsed().as_millis() as i64;
-                    let _ = db::set_task_duration(&self.pool, task_id, duration).await;
-                    self.emit(task_id, "task_failed", json!({"error": e.to_string()})).await;
-                    return Err(e);
                 }
+            }
+
+            // If all retries exhausted and step still failed
+            if let Some(e) = last_error {
+                db::update_step_status(&self.pool, step.id, TaskStatus::Failed).await?;
+                self.emit(task_id, "step_failed", json!({
+                    "step": i + 1,
+                    "error": e.to_string(),
+                    "retries_exhausted": true,
+                })).await;
+
+                // Try adaptive re-planning if there are remaining steps
+                if i < steps.len() - 1 {
+                    self.emit(task_id, "replanning", json!({
+                        "reason": format!("Step {} ({}) failed after {} attempts: {}", i + 1, step.skill, MAX_ATTEMPTS, e),
+                    })).await;
+
+                    match self.replan(
+                        &task.goal, &current_plan, &step_results, i, &e.to_string(),
+                    ).await {
+                        Ok(new_plan) => {
+                            self.emit(task_id, "replan_ready", json!({
+                                "new_steps": new_plan.len(),
+                            })).await;
+
+                            // Create new step records in DB and execute them
+                            let base_order = steps.len() as i32;
+                            for (j, new_step_plan) in new_plan.iter().enumerate() {
+                                let skill = new_step_plan["skill"].as_str().unwrap_or("code");
+                                let description = new_step_plan["description"].as_str().unwrap_or("");
+                                let new_step = db::create_task_step(
+                                    &self.pool, task_id, skill, description, base_order + j as i32,
+                                ).await?;
+
+                                // Check cancellation before each replanned step
+                                if token.is_cancelled() {
+                                    let _ = self.sandbox.release(&container_id).await;
+                                    let duration = start.elapsed().as_millis() as i64;
+                                    let _ = db::set_task_duration(&self.pool, task_id, duration).await;
+                                    return Ok(());
+                                }
+
+                                self.emit(task_id, "step_started", json!({
+                                    "step": format!("replan-{}", j + 1),
+                                    "total": new_plan.len(),
+                                    "skill": skill,
+                                    "description": description,
+                                })).await;
+
+                                db::update_step_status(&self.pool, new_step.id, TaskStatus::Running).await?;
+
+                                let replan_agent = match self.agents.get(skill) {
+                                    Some(a) => a,
+                                    None => {
+                                        match self.agents.get("code") {
+                                            Some(a) => a,
+                                            None => {
+                                                db::update_step_status(&self.pool, new_step.id, TaskStatus::Failed).await?;
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                };
+
+                                let replan_result = self.runtime.run(
+                                    &replan_agent,
+                                    description,
+                                    &sandbox_handle,
+                                    &task_id_str,
+                                    &self.redis,
+                                    0,
+                                ).await;
+
+                                match replan_result {
+                                    Ok(agent_result) => {
+                                        let step_output = json!({"output": agent_result.output});
+                                        step_results.push(step_output.clone());
+                                        all_artifacts.extend(agent_result.artifacts.clone());
+
+                                        for artifact_path in &agent_result.artifacts {
+                                            let name = artifact_path.rsplit('/').next().unwrap_or(artifact_path);
+                                            let artifact_type = Self::infer_artifact_type(name);
+                                            let mime = Self::infer_mime_type(name);
+                                            let _ = db::create_artifact(
+                                                &self.pool, task_id, Some(new_step.id),
+                                                name, &artifact_type, Some(&mime),
+                                                Some(artifact_path), None, None, None,
+                                            ).await;
+                                        }
+
+                                        db::update_step_status(&self.pool, new_step.id, TaskStatus::Completed).await?;
+                                        self.emit(task_id, "step_completed", json!({
+                                            "step": format!("replan-{}", j + 1),
+                                            "skill": skill,
+                                            "artifacts": agent_result.artifacts,
+                                            "result_preview": agent_result.output.chars().take(500).collect::<String>(),
+                                            "turns_used": agent_result.turns_used,
+                                        })).await;
+                                    }
+                                    Err(replan_step_err) => {
+                                        db::update_step_status(&self.pool, new_step.id, TaskStatus::Failed).await?;
+                                        db::set_task_error(&self.pool, task_id, &replan_step_err.to_string()).await?;
+                                        let _ = self.sandbox.release(&container_id).await;
+                                        let duration = start.elapsed().as_millis() as i64;
+                                        let _ = db::set_task_duration(&self.pool, task_id, duration).await;
+                                        self.emit(task_id, "task_failed", json!({"error": replan_step_err.to_string()})).await;
+                                        return Err(replan_step_err);
+                                    }
+                                }
+                            }
+
+                            // Successfully executed all replanned steps — break out of original loop
+                            break;
+                        }
+                        Err(replan_err) => {
+                            tracing::error!("Re-planning failed: {replan_err}");
+                            // Fall through to task failure
+                        }
+                    }
+                }
+
+                // No remaining steps or re-planning failed — fail the task
+                db::set_task_error(&self.pool, task_id, &e.to_string()).await?;
+                let _ = self.sandbox.release(&container_id).await;
+                let duration = start.elapsed().as_millis() as i64;
+                let _ = db::set_task_duration(&self.pool, task_id, duration).await;
+                self.emit(task_id, "task_failed", json!({"error": e.to_string()})).await;
+                return Err(e);
             }
         }
 

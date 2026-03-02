@@ -321,3 +321,42 @@ pub async fn set_task_duration(
         .await?;
     Ok(())
 }
+
+pub async fn increment_step_retry(
+    pool: &PgPool,
+    step_id: Uuid,
+) -> Result<i32, AppError> {
+    let row = sqlx::query_scalar::<_, i32>(
+        "UPDATE task_steps SET retry_count = retry_count + 1 WHERE id = $1 RETURNING retry_count"
+    )
+    .bind(step_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn set_step_reflection(
+    pool: &PgPool,
+    step_id: Uuid,
+    reflection: &str,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE task_steps SET reflection = $1 WHERE id = $2")
+        .bind(reflection)
+        .bind(step_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_step_error(
+    pool: &PgPool,
+    step_id: Uuid,
+    error: &str,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE task_steps SET error = $1 WHERE id = $2")
+        .bind(error)
+        .bind(step_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
