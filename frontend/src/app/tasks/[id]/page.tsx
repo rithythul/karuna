@@ -281,12 +281,12 @@ export default function TaskPage() {
 
     ws.onopen = () => {
       setStatus("live");
-      reconnectAttempt.current = 0;
 
       // Refetch on reconnect to catch missed events
       if (reconnectAttempt.current > 0) {
         refetchAll();
       }
+      reconnectAttempt.current = 0;
     };
 
     ws.onmessage = (msg) => {
@@ -310,11 +310,11 @@ export default function TaskPage() {
             .catch(handleFetchError("step update"));
         }
 
-        // Handle reflection events
-        if (event.event_type === "step_reflection") {
-          fetchJson<{ steps: TaskStep[] }>(`/api/tasks/${id}`, "reflection update")
+        // Handle step retry events (backend emits "step_retrying")
+        if (event.event_type === "step_retrying") {
+          fetchJson<{ steps: TaskStep[] }>(`/api/tasks/${id}`, "retry update")
             .then((data) => { if (data.steps) setSteps(data.steps); })
-            .catch(handleFetchError("reflection update"));
+            .catch(handleFetchError("retry update"));
         }
 
         // Handle replan events
@@ -451,7 +451,7 @@ export default function TaskPage() {
       <header
         className="sticky top-0 z-40 flex items-center justify-between px-6 py-3"
         style={{
-          background: "rgba(8,8,10,0.85)",
+          background: "var(--bg-header)",
           backdropFilter: "blur(12px)",
           borderBottom: "1px solid var(--border-subtle)",
         }}

@@ -38,6 +38,9 @@
   --border-strong: rgba(0, 0, 0, 0.20);
   --border-accent: rgba(196, 147, 46, 0.30);
 
+  /* Header */
+  --bg-header: rgba(247, 246, 243, 0.85);
+
   /* Fonts */
   --font-display: var(--font-instrument), Georgia, serif;
   --font-body: var(--font-dm-sans), system-ui, sans-serif;
@@ -75,6 +78,9 @@
   --status-planning-dim: rgba(168, 85, 247, 0.12);
   --status-info: #3b82f6;
   --status-info-dim: rgba(59, 130, 246, 0.12);
+
+  /* Header */
+  --bg-header: rgba(15, 15, 16, 0.85);
 
   /* Border — white-based for dark theme */
   --border-subtle: rgba(255, 255, 255, 0.06);

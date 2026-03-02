@@ -2,7 +2,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use crate::agent_runtime::Agent;
 use crate::soul;
-use crate::tools::{AgentTool, ReadFileTool, RunCodeTool, RunShellTool, WriteFileTool};
+use crate::tools::{AgentTool, DelegateTool, ReadFileTool, RunCodeTool, RunShellTool, WriteFileTool};
 
 pub struct DeployAgent;
 
@@ -32,6 +32,7 @@ impl Agent for DeployAgent {
             Arc::new(ReadFileTool),
             Arc::new(WriteFileTool),
             Arc::new(RunCodeTool),
+            Arc::new(DelegateTool),
         ]
     }
 }

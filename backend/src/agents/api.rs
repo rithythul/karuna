@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use crate::agent_runtime::Agent;
 use crate::soul;
 use crate::tools::{
-    AgentTool, HttpRequestTool, ReadFileTool, RunCodeTool, RunShellTool, WriteFileTool,
+    AgentTool, DelegateTool, HttpRequestTool, ReadFileTool, RunCodeTool, RunShellTool, WriteFileTool,
 };
 
 pub struct ApiAgent;
@@ -35,6 +35,7 @@ impl Agent for ApiAgent {
             Arc::new(ReadFileTool),
             Arc::new(WriteFileTool),
             Arc::new(RunShellTool),
+            Arc::new(DelegateTool),
         ]
     }
 }

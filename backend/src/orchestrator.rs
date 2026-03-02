@@ -177,9 +177,10 @@ impl Orchestrator {
                 return Ok(());
             }
 
-            // Find ready steps: not completed, not failed, all deps in completed set
+            // Find ready steps: not completed, not failed, no deps in failed, all deps completed
             let ready: Vec<usize> = (0..total_steps)
                 .filter(|i| !completed.contains(i) && !failed.contains(i))
+                .filter(|i| !deps[*i].iter().any(|d| failed.contains(d)))
                 .filter(|i| deps[*i].iter().all(|d| completed.contains(d)))
                 .collect();
 
@@ -242,12 +243,32 @@ impl Orchestrator {
                         failed.insert(idx);
                     }
                     Ok(Err(e)) => {
-                        // Sandbox acquisition error — all steps in this batch fail
+                        // Sandbox acquisition error — mark all ready steps in this batch as failed
                         tracing::error!("Sandbox acquisition error: {e}");
+                        for &idx in &ready {
+                            if !completed.contains(&idx) && !failed.contains(&idx) {
+                                failed.insert(idx);
+                                let _ = db::update_step_status(&self.pool, steps[idx].id, TaskStatus::Failed).await;
+                                self.emit(task_id, "step_failed", json!({
+                                    "step": idx + 1,
+                                    "error": format!("Sandbox acquisition failed: {e}"),
+                                })).await;
+                            }
+                        }
                     }
                     Err(e) => {
-                        // JoinError (task panicked)
+                        // JoinError (task panicked) — mark all ready steps in this batch as failed
                         tracing::error!("Step task panicked: {e}");
+                        for &idx in &ready {
+                            if !completed.contains(&idx) && !failed.contains(&idx) {
+                                failed.insert(idx);
+                                let _ = db::update_step_status(&self.pool, steps[idx].id, TaskStatus::Failed).await;
+                                self.emit(task_id, "step_failed", json!({
+                                    "step": idx + 1,
+                                    "error": format!("Task panicked: {e}"),
+                                })).await;
+                            }
+                        }
                     }
                 }
             }
