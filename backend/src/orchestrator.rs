@@ -168,6 +168,7 @@ impl Orchestrator {
         let mut failed: HashSet<usize> = HashSet::new();
         let mut step_results: Vec<Option<Value>> = vec![None; total_steps];
         let mut all_artifacts: Vec<String> = Vec::new();
+        let mut total_usage = crate::llm::TokenUsage::default();
 
         while completed.len() + failed.len() < total_steps {
             // Check for cancellation
@@ -226,16 +227,19 @@ impl Orchestrator {
                     // Release sandbox container back to pool
                     let _ = orch.sandbox.release(&container_id).await;
 
-                    Ok::<(usize, Result<(Value, Vec<String>), AppError>), AppError>((idx, result))
+                    Ok::<(usize, Result<(Value, Vec<String>, crate::llm::TokenUsage), AppError>), AppError>((idx, result))
                 });
             }
 
             // Collect results from all spawned steps
             while let Some(join_result) = join_set.join_next().await {
                 match join_result {
-                    Ok(Ok((idx, Ok((result, artifacts))))) => {
+                    Ok(Ok((idx, Ok((result, artifacts, usage))))) => {
                         step_results[idx] = Some(result);
                         all_artifacts.extend(artifacts);
+                        total_usage.prompt_tokens += usage.prompt_tokens;
+                        total_usage.completion_tokens += usage.completion_tokens;
+                        total_usage.total_tokens += usage.total_tokens;
                         completed.insert(idx);
                     }
                     Ok(Ok((idx, Err(e)))) => {
@@ -302,6 +306,11 @@ impl Orchestrator {
 
         let duration = start.elapsed().as_millis() as i64;
         let _ = db::set_task_duration(&self.pool, task_id, duration).await;
+        let _ = db::set_task_token_usage(&self.pool, task_id, json!({
+            "prompt_tokens": total_usage.prompt_tokens,
+            "completion_tokens": total_usage.completion_tokens,
+            "total_tokens": total_usage.total_tokens,
+        })).await;
 
         self.emit(task_id, "task_completed", json!({
             "result": final_result,
@@ -326,7 +335,7 @@ impl Orchestrator {
         _plan_step: &Value,
         sandbox_handle: &SandboxHandle,
         token: &CancellationToken,
-    ) -> Result<(Value, Vec<String>), AppError> {
+    ) -> Result<(Value, Vec<String>, crate::llm::TokenUsage), AppError> {
         // Check cancellation
         if token.is_cancelled() {
             return Err(AppError::Internal("Task cancelled".into()));
@@ -429,7 +438,7 @@ impl Orchestrator {
                     db::set_memory(&self.pool, task_id, &format!("step_{}_result", step_index + 1),
                         step_output.clone()).await?;
 
-                    return Ok((step_output, artifacts));
+                    return Ok((step_output, artifacts, agent_result.token_usage));
                 }
                 Err(e) => {
                     let err_str = e.to_string();

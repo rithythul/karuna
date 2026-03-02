@@ -330,6 +330,19 @@ pub async fn set_task_duration(
     Ok(())
 }
 
+pub async fn set_task_token_usage(
+    pool: &PgPool,
+    task_id: Uuid,
+    usage: serde_json::Value,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE tasks SET token_usage = $1, updated_at = now() WHERE id = $2")
+        .bind(&usage)
+        .bind(task_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn increment_step_retry(
     pool: &PgPool,
     step_id: Uuid,

@@ -14,7 +14,7 @@ use tokio::time::timeout;
 
 use crate::db;
 use crate::error::AppError;
-use crate::llm::{LlmClient, LlmResponse, ToolDefinition};
+use crate::llm::{LlmClient, LlmResponse, TokenUsage, ToolDefinition};
 use crate::redis_client::{RedisClient, TaskEvent};
 use crate::tools::{AgentTool, SandboxHandle};
 
@@ -30,6 +30,8 @@ pub struct AgentResult {
     pub artifacts: Vec<String>,
     /// Number of think-act-observe turns consumed.
     pub turns_used: u32,
+    /// Accumulated token usage across all LLM calls in this agent run.
+    pub token_usage: TokenUsage,
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +174,7 @@ impl AgentRuntime {
 
         let mut artifacts: Vec<String> = Vec::new();
         let mut turns: u32 = 0;
+        let mut total_usage = TokenUsage::default();
         let model = &self.llm.default_model.clone();
 
         loop {
@@ -187,8 +190,15 @@ impl AgentRuntime {
                 )
                 .await;
 
-            let response = match response {
-                Ok(r) => r,
+            let (response, usage) = match response {
+                Ok((r, u)) => {
+                    if let Some(u) = u {
+                        total_usage.prompt_tokens += u.prompt_tokens;
+                        total_usage.completion_tokens += u.completion_tokens;
+                        total_usage.total_tokens += u.total_tokens;
+                    }
+                    (r, ())
+                }
                 Err(e) => {
                     self.emit(redis, task_id, "agent_error", json!({
                         "agent": &agent_name,
@@ -199,6 +209,7 @@ impl AgentRuntime {
                     return Err(e);
                 }
             };
+            let _ = usage; // consumed above
 
             match response {
                 LlmResponse::Text(text) => {
@@ -224,6 +235,7 @@ impl AgentRuntime {
                         output: text,
                         artifacts,
                         turns_used: turns,
+                        token_usage: total_usage,
                     });
                 }
 
@@ -515,8 +527,15 @@ impl AgentRuntime {
                             .await;
 
                         let output = match final_response {
-                            Ok(LlmResponse::Text(text)) => text,
-                            Ok(LlmResponse::ToolCalls(_)) => {
+                            Ok((LlmResponse::Text(text), u)) => {
+                                if let Some(u) = u {
+                                    total_usage.prompt_tokens += u.prompt_tokens;
+                                    total_usage.completion_tokens += u.completion_tokens;
+                                    total_usage.total_tokens += u.total_tokens;
+                                }
+                                text
+                            }
+                            Ok((LlmResponse::ToolCalls(_), _)) => {
                                 "Agent reached turn limit and could not produce a summary."
                                     .to_string()
                             }
@@ -536,6 +555,7 @@ impl AgentRuntime {
                             output,
                             artifacts,
                             turns_used: turns,
+                            token_usage: total_usage,
                         });
                     }
                 }

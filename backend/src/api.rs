@@ -10,8 +10,17 @@ use uuid::Uuid;
 use crate::auth::AuthUser;
 use crate::db;
 use crate::error::AppError;
-use crate::models::{CreateTaskRequest, CreateTaskResponse};
+use crate::models::{CreateTaskRequest, CreateTaskResponse, Task};
 use crate::AppState;
+
+/// Fetch a task and verify it belongs to the authenticated user.
+async fn get_user_task(state: &AppState, user_id: &str, task_id: Uuid) -> Result<Task, AppError> {
+    let task = db::get_task(&state.db, task_id).await?;
+    if task.user_id != user_id {
+        return Err(AppError::NotFound(format!("Task {task_id} not found")));
+    }
+    Ok(task)
+}
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -43,23 +52,24 @@ async fn create_task(
 }
 
 async fn list_tasks(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let tasks = sqlx::query_as::<_, crate::models::Task>(
-        "SELECT * FROM tasks ORDER BY created_at DESC LIMIT 50"
+        "SELECT * FROM tasks WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50"
     )
+    .bind(&auth.0.id)
     .fetch_all(&state.db)
     .await?;
     Ok(Json(serde_json::json!({"tasks": tasks})))
 }
 
 async fn get_task(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let task = db::get_task(&state.db, id).await?;
+    let task = get_user_task(&state, &auth.0.id, id).await?;
     let steps = db::get_task_steps(&state.db, id).await?;
     let artifacts = db::get_task_artifacts(&state.db, id).await?;
     Ok(Json(serde_json::json!({
@@ -70,28 +80,31 @@ async fn get_task(
 }
 
 async fn get_task_events(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<crate::models::TaskEvent>>, AppError> {
+    get_user_task(&state, &auth.0.id, id).await?;
     let events = db::get_task_events(&state.db, id).await?;
     Ok(Json(events))
 }
 
 async fn get_task_artifacts(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<crate::models::Artifact>>, AppError> {
+    get_user_task(&state, &auth.0.id, id).await?;
     let artifacts = db::get_task_artifacts(&state.db, id).await?;
     Ok(Json(artifacts))
 }
 
 async fn get_artifact_content(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path((task_id, artifact_id)): Path<(Uuid, Uuid)>,
 ) -> Result<impl IntoResponse, AppError> {
+    get_user_task(&state, &auth.0.id, task_id).await?;
     let artifact = db::get_artifact(&state.db, artifact_id).await?;
 
     // Verify the artifact belongs to the requested task
@@ -136,19 +149,21 @@ async fn get_artifact_content(
 }
 
 async fn get_step_reasoning(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path((task_id, step_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Vec<crate::models::ReasoningTrace>>, AppError> {
+    get_user_task(&state, &auth.0.id, task_id).await?;
     let traces = db::get_reasoning_traces(&state.db, task_id, Some(step_id)).await?;
     Ok(Json(traces))
 }
 
 async fn cancel_task(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    get_user_task(&state, &auth.0.id, id).await?;
     state.orchestrator.cancel_task(id).await?;
     Ok(Json(serde_json::json!({"status": "cancelled"})))
 }

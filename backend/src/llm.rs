@@ -36,6 +36,8 @@ struct ChatRequest {
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
+    #[allow(dead_code)]
+    usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,6 +89,14 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
+/// Token usage returned by the LLM API.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
 /// Unified response from an LLM call that may include tool calls.
 #[derive(Debug, Clone)]
 pub enum LlmResponse {
@@ -121,6 +131,7 @@ struct ToolChatRequest {
 #[derive(Debug, Deserialize)]
 struct ToolChatResponse {
     choices: Vec<ToolChatChoice>,
+    usage: Option<TokenUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -282,7 +293,7 @@ impl LlmClient {
         tools: Option<Vec<ToolDefinition>>,
         temperature: Option<f64>,
         max_tokens: Option<u32>,
-    ) -> Result<LlmResponse, AppError> {
+    ) -> Result<(LlmResponse, Option<TokenUsage>), AppError> {
         let request = ToolChatRequest {
             model: model.to_string(),
             messages,
@@ -310,6 +321,7 @@ impl LlmClient {
             .await
             .map_err(|e| AppError::Llm(format!("Failed to parse response: {e}")))?;
 
+        let usage = chat_response.usage;
         let choice = chat_response
             .choices
             .first()
@@ -318,13 +330,13 @@ impl LlmClient {
         // If the model returned tool calls, prefer those over text content.
         if let Some(ref tool_calls) = choice.message.tool_calls {
             if !tool_calls.is_empty() {
-                return Ok(LlmResponse::ToolCalls(tool_calls.clone()));
+                return Ok((LlmResponse::ToolCalls(tool_calls.clone()), usage));
             }
         }
 
         // Otherwise return the text content (defaulting to empty string if null).
         let text = choice.message.content.clone().unwrap_or_default();
-        Ok(LlmResponse::Text(text))
+        Ok((LlmResponse::Text(text), usage))
     }
 
     pub async fn plan(&self, messages: Vec<ChatMessage>) -> Result<String, AppError> {
