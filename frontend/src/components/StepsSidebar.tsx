@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+import ReasoningTimeline from "./ReasoningTimeline";
+
 interface TaskStep {
   id: string;
   skill: string;
@@ -14,21 +17,22 @@ interface TaskStep {
 interface StepsSidebarProps {
   steps: TaskStep[];
   currentStep: number | null;
+  taskId: string;
 }
 
 function skillIcon(skill: string): string {
   switch (skill) {
-    case "browser": return "🌐";
-    case "code": return "💻";
-    case "research": return "🔬";
-    case "api": return "🔌";
-    case "data_analysis": return "📊";
-    case "deploy": return "🚀";
+    case "browser": return "\u{1F310}";
+    case "code": return "\u{1F4BB}";
+    case "research": return "\u{1F52C}";
+    case "api": return "\u{1F50C}";
+    case "data_analysis": return "\u{1F4CA}";
+    case "deploy": return "\u{1F680}";
     // Legacy fallbacks
-    case "browse": return "🌐";
-    case "file": return "📁";
-    case "shell": return "⚙️";
-    default: return "🔧";
+    case "browse": return "\u{1F310}";
+    case "file": return "\u{1F4C1}";
+    case "shell": return "\u2699\uFE0F";
+    default: return "\u{1F527}";
   }
 }
 
@@ -73,10 +77,21 @@ function statusIndicator(status: string, isCurrent: boolean) {
   );
 }
 
+function canExpand(status: string): boolean {
+  const s = status.toLowerCase();
+  return s === "completed" || s === "failed";
+}
+
 export type { TaskStep };
 
-export default function StepsSidebar({ steps, currentStep }: StepsSidebarProps) {
+export default function StepsSidebar({ steps, currentStep, taskId }: StepsSidebarProps) {
+  const [expandedStepId, setExpandedStepId] = useState<string | null>(null);
+
   if (steps.length === 0) return null;
+
+  function toggleStep(stepId: string) {
+    setExpandedStepId((prev) => (prev === stepId ? null : stepId));
+  }
 
   return (
     <div className="rounded-xl p-4" style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}>
@@ -92,49 +107,82 @@ export default function StepsSidebar({ steps, currentStep }: StepsSidebarProps) 
 
         {steps.map((step, i) => {
           const isCurrent = currentStep === i + 1;
+          const isExpanded = expandedStepId === step.id;
+          const expandable = canExpand(step.status);
           return (
-            <div
-              key={step.id}
-              className="relative flex items-start gap-3 rounded-lg px-2 py-2 transition-all"
-              style={{
-                background: isCurrent ? "var(--bg-hover)" : "transparent",
-              }}
-            >
-              <div className="relative z-10 flex-shrink-0 mt-0.5">
-                {statusIndicator(step.status, isCurrent)}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-[12px]">{skillIcon(step.skill)}</span>
-                  <span className="text-[12px] font-medium" style={{
-                    color: isCurrent ? "var(--text-primary)" : "var(--text-secondary)",
-                  }}>
-                    {step.skill}
-                  </span>
-                  <span className="text-[10px] font-mono" style={{ color: "var(--text-tertiary)" }}>
-                    {i + 1}/{steps.length}
-                  </span>
-                  {step.retry_count > 0 && (
-                    <span className="text-[10px] rounded-full px-1.5 py-0.5"
-                      style={{ background: "color-mix(in srgb, var(--accent) 15%, transparent)", color: "var(--accent)" }}>
-                      {step.retry_count} retries
+            <div key={step.id}>
+              <div
+                className="relative flex items-start gap-3 rounded-lg px-2 py-2 transition-all"
+                style={{
+                  background: isCurrent ? "var(--bg-hover)" : "transparent",
+                }}
+              >
+                <div className="relative z-10 flex-shrink-0 mt-0.5">
+                  {statusIndicator(step.status, isCurrent)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[12px]">{skillIcon(step.skill)}</span>
+                    <span className="text-[12px] font-medium" style={{
+                      color: isCurrent ? "var(--text-primary)" : "var(--text-secondary)",
+                    }}>
+                      {step.skill}
                     </span>
+                    <span className="text-[10px] font-mono" style={{ color: "var(--text-tertiary)" }}>
+                      {i + 1}/{steps.length}
+                    </span>
+                    {step.retry_count > 0 && (
+                      <span className="text-[10px] rounded-full px-1.5 py-0.5"
+                        style={{ background: "color-mix(in srgb, var(--accent) 15%, transparent)", color: "var(--accent)" }}>
+                        {step.retry_count} retries
+                      </span>
+                    )}
+                    {expandable && (
+                      <button
+                        onClick={() => toggleStep(step.id)}
+                        className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] cursor-pointer border-none transition-colors"
+                        style={{
+                          background: isExpanded
+                            ? "color-mix(in srgb, var(--accent) 15%, transparent)"
+                            : "transparent",
+                          color: "var(--accent)",
+                        }}
+                        title={isExpanded ? "Hide reasoning" : "Show reasoning"}
+                      >
+                        <svg
+                          className="w-3 h-3 transition-transform"
+                          style={{
+                            transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                          }}
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          strokeWidth={2}
+                          stroke="currentColor"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                        </svg>
+                        <span>{isExpanded ? "Hide" : "Trace"}</span>
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] mt-0.5 line-clamp-2" style={{ color: "var(--text-tertiary)" }}>
+                    {step.description}
+                  </p>
+                  {step.error && (
+                    <p className="text-[10px] mt-1 line-clamp-1" style={{ color: "var(--status-error)" }}>
+                      {step.error}
+                    </p>
+                  )}
+                  {step.reflection && (
+                    <p className="text-[10px] mt-1 italic line-clamp-2" style={{ color: "var(--accent)" }}>
+                      {"\u{1F4AD}"} {step.reflection}
+                    </p>
                   )}
                 </div>
-                <p className="text-[11px] mt-0.5 line-clamp-2" style={{ color: "var(--text-tertiary)" }}>
-                  {step.description}
-                </p>
-                {step.error && (
-                  <p className="text-[10px] mt-1 line-clamp-1" style={{ color: "var(--status-error)" }}>
-                    {step.error}
-                  </p>
-                )}
-                {step.reflection && (
-                  <p className="text-[10px] mt-1 italic line-clamp-2" style={{ color: "var(--accent)" }}>
-                    💭 {step.reflection}
-                  </p>
-                )}
               </div>
+              {isExpanded && (
+                <ReasoningTimeline taskId={taskId} stepId={step.id} />
+              )}
             </div>
           );
         })}

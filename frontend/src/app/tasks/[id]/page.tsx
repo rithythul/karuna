@@ -579,7 +579,7 @@ export default function TaskPage() {
             top: "52px",
           }}
         >
-          <StepsSidebar steps={steps} currentStep={currentStep} />
+          <StepsSidebar steps={steps} currentStep={currentStep} taskId={id} />
 
           {/* Duration */}
           {task?.total_duration_ms && (
