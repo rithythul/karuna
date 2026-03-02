@@ -44,6 +44,45 @@
   --font-code: var(--font-jetbrains), monospace;
 }
 
+[data-theme="dark"] {
+  /* Surface — dark grays */
+  --bg-deep: #0f0f10;
+  --bg-base: #18181b;
+  --bg-raised: #1e1e22;
+  --bg-elevated: #27272b;
+  --bg-hover: #303036;
+
+  /* Accent — same warm amber, slightly brighter for dark bg */
+  --accent: #d4a43e;
+  --accent-dim: #b88e30;
+  --accent-glow: rgba(212, 164, 62, 0.12);
+  --accent-glow-strong: rgba(212, 164, 62, 0.22);
+
+  /* Text — light on dark */
+  --text-primary: #f0f0f2;
+  --text-secondary: #a0a0a8;
+  --text-tertiary: #6b6b73;
+  --text-on-accent: #1a1a1c;
+
+  /* Status — same hues, slightly adjusted for dark bg */
+  --status-success: #22c55e;
+  --status-success-dim: rgba(34, 197, 94, 0.12);
+  --status-error: #ef4444;
+  --status-error-dim: rgba(239, 68, 68, 0.12);
+  --status-running: #3b82f6;
+  --status-running-dim: rgba(59, 130, 246, 0.12);
+  --status-planning: #a855f7;
+  --status-planning-dim: rgba(168, 85, 247, 0.12);
+  --status-info: #3b82f6;
+  --status-info-dim: rgba(59, 130, 246, 0.12);
+
+  /* Border — white-based for dark theme */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.20);
+  --border-accent: rgba(212, 164, 62, 0.35);
+}
+
 @theme inline {
   --color-background: var(--bg-deep);
   --color-foreground: var(--text-primary);
@@ -57,7 +96,9 @@
 
 html {
   background: var(--bg-deep);
-  color-scheme: light;
+}
+[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 body {

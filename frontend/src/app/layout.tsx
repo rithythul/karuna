@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { DM_Sans, JetBrains_Mono, Instrument_Serif } from "next/font/google";
 import { AuthProvider } from "@/components/AuthProvider";
+import ThemeToggle from "@/components/ThemeToggle";
 import "./globals.css";
 
 const dmSans = DM_Sans({
@@ -33,12 +34,29 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Inline script to set theme before hydration (prevents flash of wrong theme).
+  // Content is a static string literal — no user input, safe from XSS.
+  const themeScript = `
+    (function() {
+      var t = localStorage.getItem('hanuman-theme');
+      if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+    })();
+  `;
+
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body
         className={`${dmSans.variable} ${jetbrainsMono.variable} ${instrumentSerif.variable}`}
       >
         <AuthProvider>
+          <div className="fixed top-4 left-4 z-50">
+            <ThemeToggle />
+          </div>
           <div className="relative z-10">{children}</div>
         </AuthProvider>
       </body>
