@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use crate::agent_runtime::Agent;
 use crate::soul;
 use crate::tools::{
-    AgentTool, ClickTool, ExtractTool, FillTool, NavigateTool, ReadFileTool, RunShellTool,
-    ScreenshotTool, SnapshotTool, WriteFileTool,
+    AgentTool, ClickTool, DelegateTool, ExtractTool, FillTool, NavigateTool, ReadFileTool,
+    RunShellTool, ScreenshotTool, SnapshotTool, WriteFileTool,
 };
 
 pub struct BrowserAgent;
@@ -40,6 +40,7 @@ impl Agent for BrowserAgent {
             Arc::new(RunShellTool),
             Arc::new(WriteFileTool),
             Arc::new(ReadFileTool),
+            Arc::new(DelegateTool),
         ]
     }
 }
