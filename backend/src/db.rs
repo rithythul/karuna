@@ -184,6 +184,14 @@ pub async fn create_artifact(
     Ok(artifact)
 }
 
+pub async fn get_artifact(pool: &PgPool, artifact_id: Uuid) -> Result<Artifact, AppError> {
+    sqlx::query_as::<_, Artifact>("SELECT * FROM artifacts WHERE id = $1")
+        .bind(artifact_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Artifact {artifact_id} not found")))
+}
+
 pub async fn get_task_artifacts(pool: &PgPool, task_id: Uuid) -> Result<Vec<Artifact>, AppError> {
     let artifacts = sqlx::query_as::<_, Artifact>(
         "SELECT * FROM artifacts WHERE task_id = $1 ORDER BY created_at"

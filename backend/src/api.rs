@@ -1,5 +1,7 @@
 use axum::{
     extract::{Path, State},
+    http::{header, HeaderMap},
+    response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
 };
@@ -17,6 +19,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/tasks/{id}", get(get_task))
         .route("/api/tasks/{id}/events", get(get_task_events))
         .route("/api/tasks/{id}/artifacts", get(get_task_artifacts))
+        .route("/api/tasks/{task_id}/artifacts/{artifact_id}/content", get(get_artifact_content))
         .route("/api/tasks/{id}/cancel", post(cancel_task))
         .route("/api/tasks/{id}/steps/{step_id}/reasoning", get(get_step_reasoning))
         .route("/api/memory", get(list_user_memories))
@@ -82,6 +85,54 @@ async fn get_task_artifacts(
 ) -> Result<Json<Vec<crate::models::Artifact>>, AppError> {
     let artifacts = db::get_task_artifacts(&state.db, id).await?;
     Ok(Json(artifacts))
+}
+
+async fn get_artifact_content(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+    Path((task_id, artifact_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, AppError> {
+    let artifact = db::get_artifact(&state.db, artifact_id).await?;
+
+    // Verify the artifact belongs to the requested task
+    if artifact.task_id != task_id {
+        return Err(AppError::NotFound(format!("Artifact {artifact_id} not found for task {task_id}")));
+    }
+
+    let content = match artifact.content {
+        Some(c) => c,
+        None => {
+            return Err(AppError::NotFound(
+                "Artifact content not available (sandbox released)".to_string(),
+            ));
+        }
+    };
+
+    let mime = artifact
+        .mime_type
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+
+    // Determine Content-Disposition: inline for viewable types, attachment for others
+    let is_viewable = mime.starts_with("text/")
+        || mime.starts_with("image/")
+        || mime == "application/json";
+    let disposition = if is_viewable {
+        format!("inline; filename=\"{}\"", artifact.name)
+    } else {
+        format!("attachment; filename=\"{}\"", artifact.name)
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        mime.parse().unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        disposition.parse().unwrap_or_else(|_| "attachment".parse().unwrap()),
+    );
+
+    Ok((headers, content))
 }
 
 async fn get_step_reasoning(

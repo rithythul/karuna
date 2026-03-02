@@ -13,6 +13,7 @@ interface Artifact {
 
 interface ArtifactViewerProps {
   artifacts: Artifact[];
+  taskId: string;
 }
 
 function artifactIcon(type: string): string {
@@ -44,10 +45,41 @@ function formatSize(bytes: number | null): string {
   return `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
+function isViewableType(mimeType: string | null, artifactType: string): boolean {
+  if (!mimeType) {
+    // Fall back to artifact_type for common viewable types
+    return ["screenshot", "code", "report"].includes(artifactType);
+  }
+  return (
+    mimeType.startsWith("text/") ||
+    mimeType.startsWith("image/") ||
+    mimeType === "application/json" ||
+    mimeType === "text/html"
+  );
+}
+
+function contentUrl(taskId: string, artifactId: string): string {
+  return `/api/tasks/${taskId}/artifacts/${artifactId}/content`;
+}
+
 export type { Artifact };
 
-export default function ArtifactViewer({ artifacts }: ArtifactViewerProps) {
+export default function ArtifactViewer({ artifacts, taskId }: ArtifactViewerProps) {
   if (artifacts.length === 0) return null;
+
+  function handleArtifactClick(artifact: Artifact) {
+    const url = contentUrl(taskId, artifact.id);
+    if (isViewableType(artifact.mime_type, artifact.artifact_type)) {
+      window.open(url, "_blank");
+    } else {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = artifact.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  }
 
   return (
     <div className="rounded-xl p-4" style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}>
@@ -58,8 +90,10 @@ export default function ArtifactViewer({ artifacts }: ArtifactViewerProps) {
         {artifacts.map((artifact) => (
           <div
             key={artifact.id}
-            className="flex items-center gap-3 rounded-lg p-3 transition-colors"
+            onClick={() => handleArtifactClick(artifact)}
+            className="flex items-center gap-3 rounded-lg p-3 transition-colors cursor-pointer hover:brightness-110"
             style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-subtle)" }}
+            title={isViewableType(artifact.mime_type, artifact.artifact_type) ? "Open in new tab" : "Download"}
           >
             <span className="text-lg flex-shrink-0">{artifactIcon(artifact.artifact_type)}</span>
             <div className="min-w-0 flex-1">
@@ -90,6 +124,15 @@ export default function ArtifactViewer({ artifacts }: ArtifactViewerProps) {
                 )}
               </div>
             </div>
+            <span
+              className="text-[11px] font-medium flex-shrink-0 rounded px-2 py-1"
+              style={{
+                color: "var(--text-secondary)",
+                background: "var(--bg-raised)",
+              }}
+            >
+              {isViewableType(artifact.mime_type, artifact.artifact_type) ? "View" : "Download"}
+            </span>
           </div>
         ))}
       </div>

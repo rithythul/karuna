@@ -707,7 +707,7 @@ export default function TaskPage() {
                     </p>
                   </div>
                 ) : (
-                  <ArtifactViewer artifacts={artifacts} />
+                  <ArtifactViewer artifacts={artifacts} taskId={id} />
                 )}
               </div>
             )}
