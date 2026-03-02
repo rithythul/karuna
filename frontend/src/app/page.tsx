@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
 
 const EXAMPLES = [
@@ -137,6 +138,17 @@ export default function Home() {
     <div className="flex min-h-screen flex-col items-center justify-center px-6">
       {/* User menu — top right */}
       <div className="fixed top-4 right-4 z-50 flex items-center gap-3 animate-fade-in-up">
+        <Link
+          href="/tasks"
+          className="rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors"
+          style={{
+            color: "var(--text-secondary)",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = "var(--accent-dim)")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-secondary)")}
+        >
+          Task History
+        </Link>
         <span className="text-[13px]" style={{ color: "var(--text-secondary)" }}>
           {user.full_name}
         </span>

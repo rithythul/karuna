@@ -458,7 +458,7 @@ export default function TaskPage() {
       >
         <div className="flex items-center gap-4">
           <Link
-            href="/"
+            href="/tasks"
             className="flex items-center gap-2 text-[13px] transition-colors"
             style={{ color: "var(--text-tertiary)" }}
             onMouseEnter={(e) =>
@@ -471,7 +471,7 @@ export default function TaskPage() {
             <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
             </svg>
-            Hanuman
+            Task History
           </Link>
 
           <div
