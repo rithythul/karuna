@@ -6,7 +6,7 @@ infra:
 
 # Build sandbox Docker image
 sandbox:
-	cd sandbox && docker build -t karuna-sandbox:latest .
+	cd sandbox && docker build -t hanuman-sandbox:latest .
 
 # Full setup: infra + sandbox + frontend deps
 setup: infra sandbox
@@ -14,7 +14,7 @@ setup: infra sandbox
 
 # Dev: start infra + backend + frontend
 dev: infra
-	@echo "Starting Karuna..."
+	@echo "Starting Hanuman..."
 	@echo "Backend:  http://localhost:8000"
 	@echo "Frontend: http://localhost:3000"
 	@SQLX_OFFLINE=true cargo run &

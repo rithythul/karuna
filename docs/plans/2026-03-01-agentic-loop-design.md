@@ -5,7 +5,7 @@
 
 ## Goal
 
-Evolve Karuna from one-shot skill execution to autonomous agents with think-act-observe reasoning loops.
+Evolve Hanuman from one-shot skill execution to autonomous agents with think-act-observe reasoning loops.
 
 **Current:** `Orchestrator -> skill.execute(input) -> output` (single function call)
 **Target:** `Orchestrator -> Agent(goal) -> [think -> act -> observe]* -> output` (agentic loop)

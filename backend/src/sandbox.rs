@@ -63,7 +63,7 @@ impl SandboxManager {
             image: Some(self.image.clone()),
             host_config: Some(host_config),
             labels: Some(
-                [("karuna.role".to_string(), label.to_string())]
+                [("hanuman.role".to_string(), label.to_string())]
                     .into_iter()
                     .collect(),
             ),
@@ -247,7 +247,7 @@ mod tests {
             default_model: String::new(),
             planning_model: String::new(),
             fast_model: String::new(),
-            sandbox_image: "karuna-sandbox:latest".into(),
+            sandbox_image: "hanuman-sandbox:latest".into(),
             sandbox_memory_limit: 512,
             sandbox_cpu_quota: 50000,
             host: "0.0.0.0".into(),
@@ -267,7 +267,7 @@ mod tests {
         // Skip assertions if Docker is not available.
         if std::path::Path::new("/var/run/docker.sock").exists() {
             let manager = result.expect("Docker socket exists but connection failed");
-            assert_eq!(manager.image, "karuna-sandbox:latest");
+            assert_eq!(manager.image, "hanuman-sandbox:latest");
             assert_eq!(manager.memory_limit, 512 * 1024 * 1024);
             assert_eq!(manager.cpu_quota, 50000);
             assert_eq!(manager.pool_target_size, 3);
@@ -283,7 +283,7 @@ mod tests {
         let expected_memory = 512_i64 * 1024 * 1024;
         assert_eq!(config.sandbox_memory_limit * 1024 * 1024, expected_memory);
         assert_eq!(config.sandbox_cpu_quota, 50000);
-        assert_eq!(config.sandbox_image, "karuna-sandbox:latest");
+        assert_eq!(config.sandbox_image, "hanuman-sandbox:latest");
     }
 
     #[tokio::test]

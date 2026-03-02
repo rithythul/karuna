@@ -24,7 +24,7 @@ const instrumentSerif = Instrument_Serif({
 });
 
 export const metadata: Metadata = {
-  title: "Karuna",
+  title: "Hanuman",
   description: "Autonomous AI agent platform",
 };
 

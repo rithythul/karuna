@@ -101,7 +101,7 @@ export default function Home() {
             >
               Welcome to
               <br />
-              <span style={{ color: "var(--accent)" }}>Karuna</span>
+              <span style={{ color: "var(--accent)" }}>Hanuman</span>
             </h1>
             <p className="mt-4 text-[14px]" style={{ color: "var(--text-tertiary)" }}>
               Sign in with your KOOMPI ID to get started
@@ -126,7 +126,7 @@ export default function Home() {
 
         <div className="fixed bottom-0 left-0 right-0 flex justify-center py-5 text-[12px]"
           style={{ color: "var(--text-tertiary)" }}>
-          Karuna
+          Hanuman
         </div>
       </div>
     );
@@ -253,7 +253,7 @@ export default function Home() {
 
       <div className="fixed bottom-0 left-0 right-0 flex justify-center py-5 text-[12px]"
         style={{ color: "var(--text-tertiary)" }}>
-        Karuna
+        Hanuman
       </div>
     </div>
   );

@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Replace Karuna's one-shot skill system with autonomous agents that run think-act-observe reasoning loops.
+**Goal:** Replace Hanuman's one-shot skill system with autonomous agents that run think-act-observe reasoning loops.
 
 **Architecture:** Each agent gets a system prompt, a set of tools, and runs in a generic AgentRuntime loop. The LLM picks tools via OpenRouter's tool-calling API, the runtime executes them in the sandbox, and observations feed back to the LLM. The orchestrator plans steps and dispatches to agents instead of skills.
 

@@ -167,8 +167,8 @@ impl LlmClient {
         let response = self.client
             .post(format!("{}/chat/completions", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("HTTP-Referer", "https://karuna.ai")
-            .header("X-Title", "Karuna AI Partner")
+            .header("HTTP-Referer", "https://hanuman.ai")
+            .header("X-Title", "Hanuman AI Partner")
             .json(&request)
             .send()
             .await
@@ -219,8 +219,8 @@ impl LlmClient {
         let response = self.client
             .post(format!("{}/chat/completions", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("HTTP-Referer", "https://karuna.ai")
-            .header("X-Title", "Karuna AI Partner")
+            .header("HTTP-Referer", "https://hanuman.ai")
+            .header("X-Title", "Hanuman AI Partner")
             .json(&request)
             .send()
             .await

@@ -51,7 +51,7 @@ where
             .split(';')
             .filter_map(|c| {
                 let c = c.trim();
-                c.strip_prefix("karuna_session=")
+                c.strip_prefix("hanuman_session=")
             })
             .next();
 
@@ -66,7 +66,7 @@ where
             }
         };
 
-        let key = format!("karuna:session:{session_id}");
+        let key = format!("hanuman:session:{session_id}");
         let mut conn = app_state
             .redis
             .conn()
@@ -130,7 +130,7 @@ async fn login(State(state): State<AppState>) -> Result<Json<serde_json::Value>,
 
     // Generate CSRF state token
     let csrf_state = Uuid::new_v4().to_string();
-    let state_key = format!("karuna:oauth_state:{csrf_state}");
+    let state_key = format!("hanuman:oauth_state:{csrf_state}");
     let mut conn = state.redis.conn().await?;
     conn.set_ex::<_, _, ()>(&state_key, "1", STATE_TTL_SECS)
         .await
@@ -159,7 +159,7 @@ async fn exchange_token(
     let cfg = &state.config;
 
     // Validate CSRF state
-    let state_key = format!("karuna:oauth_state:{}", req.state);
+    let state_key = format!("hanuman:oauth_state:{}", req.state);
     let mut conn = state.redis.conn().await?;
     let exists: bool = conn
         .get_del(&state_key)
@@ -244,7 +244,7 @@ async fn exchange_token(
 
     // Create session in Redis
     let session_id = Uuid::new_v4().to_string();
-    let session_key = format!("karuna:session:{session_id}");
+    let session_key = format!("hanuman:session:{session_id}");
     let user_json = serde_json::to_string(&user)
         .map_err(|e| AppError::Internal(format!("Serialize session: {e}")))?;
 
@@ -254,7 +254,7 @@ async fn exchange_token(
 
     // Also store the KOOMPI access/refresh tokens for the session
     if let Some(refresh) = token_data["refresh_token"].as_str() {
-        let refresh_key = format!("karuna:session:{session_id}:refresh");
+        let refresh_key = format!("hanuman:session:{session_id}:refresh");
         let _ = conn
             .set_ex::<_, _, ()>(&refresh_key, refresh, SESSION_TTL_SECS)
             .await;
@@ -262,7 +262,7 @@ async fn exchange_token(
 
     // Set session cookie
     let cookie = format!(
-        "karuna_session={session_id}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL_SECS}"
+        "hanuman_session={session_id}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL_SECS}"
     );
 
     Ok((
@@ -289,18 +289,18 @@ async fn logout(
 
     if let Some(session_id) = cookie_header
         .split(';')
-        .filter_map(|c| c.trim().strip_prefix("karuna_session="))
+        .filter_map(|c| c.trim().strip_prefix("hanuman_session="))
         .next()
     {
-        let key = format!("karuna:session:{session_id}");
-        let refresh_key = format!("karuna:session:{session_id}:refresh");
+        let key = format!("hanuman:session:{session_id}");
+        let refresh_key = format!("hanuman:session:{session_id}:refresh");
         let mut conn = state.redis.conn().await?;
         let _: () = conn.del(&key).await.unwrap_or(());
         let _: () = conn.del(&refresh_key).await.unwrap_or(());
     }
 
     // Clear cookie
-    let cookie = "karuna_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+    let cookie = "hanuman_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
 
     Ok((
         [(header::SET_COOKIE, cookie)],
@@ -329,7 +329,7 @@ async fn dev_seed(
     };
 
     let session_id = Uuid::new_v4().to_string();
-    let session_key = format!("karuna:session:{session_id}");
+    let session_key = format!("hanuman:session:{session_id}");
     let user_json = serde_json::to_string(&user)
         .map_err(|e| AppError::Internal(format!("Serialize session: {e}")))?;
 
@@ -339,7 +339,7 @@ async fn dev_seed(
         .map_err(|e| AppError::Internal(format!("Redis dev-seed error: {e}")))?;
 
     let cookie = format!(
-        "karuna_session={session_id}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL_SECS}"
+        "hanuman_session={session_id}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL_SECS}"
     );
 
     tracing::info!("Dev seed session created for {}", user.full_name);

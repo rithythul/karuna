@@ -16,7 +16,7 @@ pub struct TaskEvent {
     pub data: serde_json::Value,
 }
 
-/// Redis-backed infrastructure for Karuna.
+/// Redis-backed infrastructure for Hanuman.
 ///
 /// Provides three capabilities:
 /// - **Connection pool**: shared across the app via `conn()`
@@ -55,9 +55,9 @@ impl RedisClient {
 
     /// Publish a task event to a Redis channel.
     ///
-    /// Channel format: `karuna:task:{task_id}:events`
+    /// Channel format: `hanuman:task:{task_id}:events`
     pub async fn publish_event(&self, event: &TaskEvent) -> Result<(), AppError> {
-        let channel = format!("karuna:task:{}:events", event.task_id);
+        let channel = format!("hanuman:task:{}:events", event.task_id);
         let payload = serde_json::to_string(event)
             .map_err(|e| AppError::Internal(format!("Serialize error: {e}")))?;
         let mut conn = self.conn().await?;
@@ -73,7 +73,7 @@ impl RedisClient {
     /// Subscribe to events for a specific task.
     ///
     /// Returns an mpsc receiver that yields `TaskEvent`s. A background tokio task
-    /// listens on the Redis Pub/Sub channel `karuna:task:{task_id}:events` and
+    /// listens on the Redis Pub/Sub channel `hanuman:task:{task_id}:events` and
     /// forwards deserialized events into the channel. The background task exits
     /// when the receiver is dropped.
     ///
@@ -82,7 +82,7 @@ impl RedisClient {
         &self,
         task_id: &str,
     ) -> Result<mpsc::UnboundedReceiver<TaskEvent>, AppError> {
-        let channel = format!("karuna:task:{task_id}:events");
+        let channel = format!("hanuman:task:{task_id}:events");
         let (tx, rx) = mpsc::unbounded_channel();
 
         // Pub/Sub requires a dedicated connection — create one directly.
@@ -128,7 +128,7 @@ impl RedisClient {
     /// (`RPUSH`) and popped from the left (`BLPOP`).
     pub async fn enqueue_task(&self, task_id: &str) -> Result<(), AppError> {
         let mut conn = self.conn().await?;
-        conn.rpush::<_, _, ()>("karuna:queue:tasks", task_id)
+        conn.rpush::<_, _, ()>("hanuman:queue:tasks", task_id)
             .await
             .map_err(|e| AppError::Internal(format!("Redis enqueue error: {e}")))?;
         Ok(())
@@ -145,7 +145,7 @@ impl RedisClient {
         let mut conn = client.get_multiplexed_async_connection().await
             .map_err(|e| AppError::Internal(format!("Redis connection error: {e}")))?;
         let result: redis::RedisResult<Option<(String, String)>> = redis::cmd("BLPOP")
-            .arg("karuna:queue:tasks")
+            .arg("hanuman:queue:tasks")
             .arg(timeout_secs)
             .query_async(&mut conn)
             .await;
@@ -159,7 +159,7 @@ impl RedisClient {
     pub async fn queue_length(&self) -> Result<usize, AppError> {
         let mut conn = self.conn().await?;
         let len: usize = conn
-            .llen("karuna:queue:tasks")
+            .llen("hanuman:queue:tasks")
             .await
             .map_err(|e| AppError::Internal(format!("Redis queue length error: {e}")))?;
         Ok(len)

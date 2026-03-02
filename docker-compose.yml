@@ -2,15 +2,15 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: karuna
-      POSTGRES_PASSWORD: karuna
-      POSTGRES_DB: karuna
+      POSTGRES_USER: hanuman
+      POSTGRES_PASSWORD: hanuman
+      POSTGRES_DB: hanuman
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U karuna"]
+      test: ["CMD-SHELL", "pg_isready -U hanuman"]
       interval: 5s
       timeout: 5s
       retries: 5
