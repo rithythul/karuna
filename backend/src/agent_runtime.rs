@@ -2,10 +2,13 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tracing::{error, info, warn};
+
+use tokio::time::timeout;
 
 use crate::error::AppError;
 use crate::llm::{LlmClient, LlmResponse, ToolDefinition};
@@ -307,8 +310,12 @@ impl AgentRuntime {
                                     }))
                                     .await;
 
-                                    match tool.execute(params, sandbox).await {
-                                        Ok(result) => {
+                                    let tool_timeout = Self::tool_timeout(tool_name);
+                                    let exec_result =
+                                        timeout(tool_timeout, tool.execute(params, sandbox)).await;
+
+                                    match exec_result {
+                                        Ok(Ok(result)) => {
                                             self.emit(
                                                 redis,
                                                 task_id,
@@ -333,7 +340,7 @@ impl AgentRuntime {
                                                 "content": output_str
                                             }));
                                         }
-                                        Err(e) => {
+                                        Ok(Err(e)) => {
                                             self.emit(
                                                 redis,
                                                 task_id,
@@ -350,6 +357,40 @@ impl AgentRuntime {
                                                 "role": "tool",
                                                 "tool_call_id": tool_call_id,
                                                 "content": format!("Tool error: {e}")
+                                            }));
+                                        }
+                                        Err(_elapsed) => {
+                                            warn!(
+                                                agent = agent_name,
+                                                tool = tool_name.as_str(),
+                                                timeout_secs = tool_timeout.as_secs(),
+                                                "Tool execution timed out"
+                                            );
+
+                                            self.emit(
+                                                redis,
+                                                task_id,
+                                                "agent_error",
+                                                json!({
+                                                    "agent": &agent_name,
+                                                    "error": format!(
+                                                        "Tool '{}' timed out after {}s",
+                                                        tool_name,
+                                                        tool_timeout.as_secs()
+                                                    ),
+                                                    "turn": turns,
+                                                }),
+                                            )
+                                            .await;
+
+                                            messages.push(json!({
+                                                "role": "tool",
+                                                "tool_call_id": tool_call_id,
+                                                "content": format!(
+                                                    "Tool '{}' timed out after {}s. Try a different approach.",
+                                                    tool_name,
+                                                    tool_timeout.as_secs()
+                                                )
                                             }));
                                         }
                                     }
@@ -476,6 +517,21 @@ impl AgentRuntime {
         // Run the child agent recursively with the same sandbox (shared container)
         self.run(&child_agent, sub_goal, sandbox, task_id, redis, depth + 1)
             .await
+    }
+
+    /// Return the execution timeout for a given tool name.
+    ///
+    /// Browser tools get 120s (pages may be slow to load/render), code execution
+    /// gets 300s (user programs can legitimately run for minutes), and everything
+    /// else gets 60s.
+    fn tool_timeout(tool_name: &str) -> Duration {
+        match tool_name {
+            "navigate" | "click" | "fill" | "extract" | "snapshot" | "screenshot" => {
+                Duration::from_secs(120)
+            }
+            "run_code" => Duration::from_secs(300),
+            _ => Duration::from_secs(60),
+        }
     }
 
     /// Publish an event via Redis, logging errors instead of crashing the loop.
