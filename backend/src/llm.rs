@@ -1,5 +1,8 @@
+use std::time::Duration;
+
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::config::Config;
 use crate::error::AppError;
@@ -150,6 +153,80 @@ impl LlmClient {
         }
     }
 
+    /// Returns `true` for HTTP status codes that are worth retrying:
+    /// 429 (rate limit), 500, 502, 503, 504 (server errors).
+    fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+        matches!(
+            status.as_u16(),
+            429 | 500 | 502 | 503 | 504
+        )
+    }
+
+    /// Execute an HTTP request with up to 3 retries and exponential backoff
+    /// (1 s, 2 s, 4 s) for retryable status codes.
+    ///
+    /// `build_request` is called on every attempt so the request body is
+    /// re-created fresh (the underlying `reqwest::RequestBuilder` is consumed
+    /// by `.send()`).
+    ///
+    /// Returns the successful `reqwest::Response` or the last error.
+    async fn request_with_retry<F>(
+        &self,
+        build_request: F,
+    ) -> Result<reqwest::Response, AppError>
+    where
+        F: Fn(&Client) -> reqwest::RequestBuilder,
+    {
+        const MAX_RETRIES: u32 = 3;
+        let backoff_durations = [
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            Duration::from_secs(4),
+        ];
+
+        let mut last_error: Option<AppError> = None;
+
+        for attempt in 0..=MAX_RETRIES {
+            let response = build_request(&self.client)
+                .send()
+                .await
+                .map_err(|e| AppError::Llm(format!("Request failed: {e}")))?;
+
+            if response.status().is_success() {
+                return Ok(response);
+            }
+
+            let status = response.status();
+
+            // Non-retryable status — fail immediately.
+            if !Self::is_retryable_status(status) {
+                let body = response.text().await.unwrap_or_default();
+                return Err(AppError::Llm(format!("OpenRouter {status}: {body}")));
+            }
+
+            // Retryable status but we've exhausted all retries.
+            if attempt == MAX_RETRIES {
+                let body = response.text().await.unwrap_or_default();
+                last_error = Some(AppError::Llm(format!(
+                    "OpenRouter {status} after {} retries: {body}",
+                    MAX_RETRIES
+                )));
+                break;
+            }
+
+            let delay = backoff_durations[attempt as usize];
+            warn!(
+                status = %status,
+                attempt = attempt + 1,
+                delay_secs = delay.as_secs(),
+                "Retryable LLM error, backing off"
+            );
+            tokio::time::sleep(delay).await;
+        }
+
+        Err(last_error.unwrap_or_else(|| AppError::Llm("Request failed after retries".into())))
+    }
+
     pub async fn chat(
         &self,
         model: &str,
@@ -164,21 +241,19 @@ impl LlmClient {
             max_tokens,
         };
 
-        let response = self.client
-            .post(format!("{}/chat/completions", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("HTTP-Referer", "https://hanuman.ai")
-            .header("X-Title", "Hanuman AI Partner")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| AppError::Llm(format!("Request failed: {e}")))?;
+        let url = format!("{}/chat/completions", self.base_url);
+        let api_key = self.api_key.clone();
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(AppError::Llm(format!("OpenRouter {status}: {body}")));
-        }
+        let response = self
+            .request_with_retry(|client| {
+                client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", api_key))
+                    .header("HTTP-Referer", "https://hanuman.ai")
+                    .header("X-Title", "Hanuman AI Partner")
+                    .json(&request)
+            })
+            .await?;
 
         let chat_response: ChatResponse = response
             .json()
@@ -216,21 +291,19 @@ impl LlmClient {
             max_tokens,
         };
 
-        let response = self.client
-            .post(format!("{}/chat/completions", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("HTTP-Referer", "https://hanuman.ai")
-            .header("X-Title", "Hanuman AI Partner")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| AppError::Llm(format!("Request failed: {e}")))?;
+        let url = format!("{}/chat/completions", self.base_url);
+        let api_key = self.api_key.clone();
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(AppError::Llm(format!("OpenRouter {status}: {body}")));
-        }
+        let response = self
+            .request_with_retry(|client| {
+                client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", api_key))
+                    .header("HTTP-Referer", "https://hanuman.ai")
+                    .header("X-Title", "Hanuman AI Partner")
+                    .json(&request)
+            })
+            .await?;
 
         let chat_response: ToolChatResponse = response
             .json()
