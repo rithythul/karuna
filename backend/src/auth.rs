@@ -16,6 +16,19 @@ const KOOMPI_OAUTH_BASE: &str = "https://oauth.koompi.org";
 const SESSION_TTL_SECS: u64 = 86400; // 24 hours
 const STATE_TTL_SECS: u64 = 600; // 10 minutes
 
+/// Build a Set-Cookie header value with the Secure flag in production.
+fn session_cookie(session_id: &str, dev_mode: bool) -> String {
+    let secure = if dev_mode { "" } else { "; Secure" };
+    format!(
+        "hanuman_session={session_id}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL_SECS}{secure}"
+    )
+}
+
+fn clear_cookie(dev_mode: bool) -> String {
+    let secure = if dev_mode { "" } else { "; Secure" };
+    format!("hanuman_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}")
+}
+
 /// User info stored in session
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionUser {
@@ -261,9 +274,7 @@ async fn exchange_token(
     }
 
     // Set session cookie
-    let cookie = format!(
-        "hanuman_session={session_id}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL_SECS}"
-    );
+    let cookie = session_cookie(&session_id, state.config.dev_mode);
 
     Ok((
         [(header::SET_COOKIE, cookie)],
@@ -300,10 +311,10 @@ async fn logout(
     }
 
     // Clear cookie
-    let cookie = "hanuman_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+    let cookie = clear_cookie(state.config.dev_mode);
 
     Ok((
-        [(header::SET_COOKIE, cookie)],
+        [(header::SET_COOKIE, cookie.clone())],
         Json(serde_json::json!({"status": "logged_out"})),
     ))
 }
@@ -319,6 +330,12 @@ async fn dev_seed(
     State(state): State<AppState>,
     Json(req): Json<DevSeedRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    if !state.config.dev_mode {
+        return Err(AppError::BadRequest(
+            "Dev seed is only available when HANUMAN_DEV_MODE=true".into(),
+        ));
+    }
+
     let user = SessionUser {
         id: format!("dev-{}", Uuid::new_v4()),
         full_name: req.name.unwrap_or_else(|| "Rithythul".into()),
@@ -338,9 +355,7 @@ async fn dev_seed(
         .await
         .map_err(|e| AppError::Internal(format!("Redis dev-seed error: {e}")))?;
 
-    let cookie = format!(
-        "hanuman_session={session_id}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL_SECS}"
-    );
+    let cookie = session_cookie(&session_id, state.config.dev_mode);
 
     tracing::info!("Dev seed session created for {}", user.full_name);
 

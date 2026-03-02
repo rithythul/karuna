@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use axum::{routing::get, Json, Router};
 use sqlx::postgres::PgPoolOptions;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{Any, AllowOrigin, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use config::Config;
@@ -70,16 +70,41 @@ async fn main() {
         db.clone(), llm.clone(), sandbox.clone(), agents.clone(), redis.clone(),
     );
 
-    // Spawn worker in background
+    // Spawn worker with supervision — restarts on panic
     let worker = orchestrator.clone();
-    tokio::spawn(async move { worker.run_worker().await });
+    tokio::spawn(async move {
+        loop {
+            tracing::info!("Starting orchestrator worker");
+            let w = worker.clone();
+            let handle = tokio::spawn(async move { w.run_worker().await });
+            match handle.await {
+                Ok(()) => {
+                    tracing::error!("Worker exited unexpectedly, restarting in 1s");
+                }
+                Err(e) => {
+                    tracing::error!("Worker panicked: {e}, restarting in 1s");
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    });
 
     let state = AppState { db, config: config.clone(), llm, redis, sandbox, agents, orchestrator };
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = if config.dev_mode {
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    } else {
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::exact(
+                config.public_url.parse().unwrap_or_else(|_| "http://localhost:3000".parse().unwrap()),
+            ))
+            .allow_methods(Any)
+            .allow_headers(Any)
+            .allow_credentials(true)
+    };
 
     let app = Router::new()
         .route("/health", get(health))

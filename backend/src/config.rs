@@ -19,6 +19,7 @@ pub struct Config {
     pub koompi_client_secret: String,
     pub koompi_redirect_uri: String,
     pub public_url: String,
+    pub dev_mode: bool,
 }
 
 impl Config {
@@ -57,6 +58,9 @@ impl Config {
                 .unwrap_or_default(),
             koompi_redirect_uri,
             public_url,
+            dev_mode: env::var("HANUMAN_DEV_MODE")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
         }
     }
 }

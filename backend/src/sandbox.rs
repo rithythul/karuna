@@ -56,6 +56,8 @@ impl SandboxManager {
         let host_config = HostConfig {
             memory: Some(self.memory_limit),
             cpu_quota: Some(self.cpu_quota),
+            pids_limit: Some(256),
+            security_opt: Some(vec!["no-new-privileges".to_string()]),
             ..Default::default()
         };
 
@@ -256,6 +258,7 @@ mod tests {
             koompi_client_secret: String::new(),
             koompi_redirect_uri: String::new(),
             public_url: String::new(),
+            dev_mode: true,
         }
     }
 

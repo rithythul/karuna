@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -108,7 +108,18 @@ impl Orchestrator {
         let token = CancellationToken::new();
         self.cancellation_tokens.write().await.insert(task_id, token.clone());
 
-        let result = self.execute_task_inner(task_id, &token).await;
+        // Task-level timeout: 30 minutes max
+        const TASK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+        let result = match tokio::time::timeout(TASK_TIMEOUT, self.execute_task_inner(task_id, &token)).await {
+            Ok(r) => r,
+            Err(_) => {
+                tracing::error!("Task {task_id} timed out after 30 minutes");
+                db::set_task_error(&self.pool, task_id, "Task timed out after 30 minutes").await?;
+                db::update_task_status(&self.pool, task_id, TaskStatus::Failed).await?;
+                self.emit(task_id, "task_failed", json!({"error": "Task timed out after 30 minutes"})).await;
+                Err(AppError::Internal("Task timed out".into()))
+            }
+        };
 
         // Clean up token
         self.cancellation_tokens.write().await.remove(&task_id);
