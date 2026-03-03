@@ -22,6 +22,7 @@ function contentUrl(taskId: string, artifactId: string): string {
 
 function ArtifactPreview({ artifact, taskId }: { artifact: Artifact; taskId: string }) {
   const [textContent, setTextContent] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState(false);
   const url = contentUrl(taskId, artifact.id);
   const mime = artifact.mime_type ?? "";
 
@@ -31,9 +32,16 @@ function ArtifactPreview({ artifact, taskId }: { artifact: Artifact; taskId: str
       mime === "application/json";
     if (isText) {
       fetch(url)
-        .then((r) => r.text())
-        .then(setTextContent)
-        .catch(() => {});
+        .then((r) => {
+          if (!r.ok) {
+            setFetchError(true);
+            return;
+          }
+          return r.text().then(setTextContent);
+        })
+        .catch(() => {
+          setFetchError(true);
+        });
     }
   }, [url, mime]);
 
@@ -43,7 +51,7 @@ function ArtifactPreview({ artifact, taskId }: { artifact: Artifact; taskId: str
         src={url}
         className="w-full rounded-lg"
         style={{ height: 480, border: "1px solid var(--border-subtle)" }}
-        sandbox="allow-scripts allow-same-origin"
+        sandbox="allow-scripts"
         title={artifact.name}
       />
     );
@@ -77,6 +85,17 @@ function ArtifactPreview({ artifact, taskId }: { artifact: Artifact; taskId: str
     );
   }
 
+  if (fetchError) {
+    return (
+      <p
+        className="text-[12px]"
+        style={{ color: "var(--text-tertiary)" }}
+      >
+        Preview unavailable
+      </p>
+    );
+  }
+
   // Fallback: download button
   return (
     <a
@@ -99,6 +118,11 @@ export default function ResultCard({ result, artifacts, taskId }: ResultCardProp
   const [selectedId, setSelectedId] = useState<string | null>(
     outputArtifacts.length > 0 ? outputArtifacts[0].id : null
   );
+
+  useEffect(() => {
+    setSelectedId(outputArtifacts.length > 0 ? outputArtifacts[0].id : null);
+  }, [outputArtifacts.length]);
+
   const selected = outputArtifacts.find((a) => a.id === selectedId) ?? null;
 
   return (
@@ -124,7 +148,7 @@ export default function ResultCard({ result, artifacts, taskId }: ResultCardProp
         <ul className="flex flex-col gap-1.5 mb-5">
           {result.key_outputs.map((output, i) => (
             <li
-              key={i}
+              key={`output-${i}`}
               className="flex items-start gap-2 text-[13px]"
               style={{ color: "var(--text-secondary)" }}
             >
@@ -180,7 +204,7 @@ export default function ResultCard({ result, artifacts, taskId }: ResultCardProp
           <ul className="flex flex-col gap-1">
             {result.next_steps.map((step, i) => (
               <li
-                key={i}
+                key={`step-${i}`}
                 className="text-[12px]"
                 style={{ color: "var(--text-secondary)" }}
               >
