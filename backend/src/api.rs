@@ -136,20 +136,41 @@ async fn handle_multipart_task(
 
     let goal = goal.ok_or_else(|| AppError::BadRequest("Missing 'goal' field".into()))?;
 
-    // Insert task into DB first (no Redis enqueue yet)
-    let task = db::create_task(&state.db, &auth.0.id, &goal).await?;
+    // Use a transaction so that the task row and all artifact rows are either
+    // all committed or all rolled back — preventing permanently-orphaned tasks.
+    let mut tx = state.db.begin().await
+        .map_err(|e| AppError::Internal(format!("Failed to start transaction: {e}")))?;
 
-    // Store all artifacts before enqueuing — if this fails the task stays unqueued
+    let task_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO tasks (user_id, goal) VALUES ($1, $2) RETURNING id"
+    )
+    .bind(&auth.0.id)
+    .bind(&goal)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to create task: {e}")))?;
+
     for (name, mime_type, content) in &files {
-        db::create_input_artifact(&state.db, task.id, name, mime_type, content)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to store artifact: {e}")))?;
+        sqlx::query(
+            "INSERT INTO artifacts (task_id, name, artifact_type, mime_type, content) \
+             VALUES ($1, $2, 'input', $3, $4)"
+        )
+        .bind(task_id)
+        .bind(name)
+        .bind(mime_type)
+        .bind(content)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to store artifact: {e}")))?;
     }
 
-    // Only enqueue to Redis after all DB writes have succeeded
-    state.orchestrator.enqueue(task.id).await?;
+    tx.commit().await
+        .map_err(|e| AppError::Internal(format!("Failed to commit transaction: {e}")))?;
 
-    Ok(Json(CreateTaskResponse { task_id: task.id }))
+    // Only enqueue to Redis after all DB writes have succeeded
+    state.orchestrator.enqueue(task_id).await?;
+
+    Ok(Json(CreateTaskResponse { task_id }))
 }
 
 async fn list_tasks(
