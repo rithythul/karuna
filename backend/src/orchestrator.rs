@@ -11,7 +11,7 @@ use crate::agent_runtime::{AgentRegistry, AgentRuntime};
 use crate::db;
 use crate::error::AppError;
 use crate::llm::{ChatMessage, LlmClient};
-use crate::models::{TaskStatus, TaskStep, UserMemory};
+use crate::models::{InputArtifact, TaskStatus, TaskStep, UserMemory};
 use crate::redis_client::{RedisClient, TaskEvent};
 use crate::sandbox::SandboxManager;
 use crate::soul;
@@ -141,11 +141,15 @@ impl Orchestrator {
             Some(Self::format_user_memory(&user_memories))
         };
 
+        // Load input artifacts for this task
+        let input_artifacts = db::get_input_artifacts(&self.pool, task_id).await
+            .unwrap_or_default();
+
         // Phase 1: Plan
         db::update_task_status(&self.pool, task_id, TaskStatus::Planning).await?;
         self.emit(task_id, "planning", json!({})).await;
 
-        let plan = self.create_plan(&task.goal, user_context.as_deref()).await?;
+        let plan = self.create_plan(&task.goal, user_context.as_deref(), &input_artifacts).await?;
 
         db::set_task_plan(&self.pool, task_id, json!(&plan)).await?;
         self.emit(task_id, "plan_ready", json!({"steps": plan.len()})).await;
@@ -219,6 +223,7 @@ impl Orchestrator {
                 let plan_step = current_plan[idx].clone();
                 let orch = self.clone();
                 let token_clone = token.clone();
+                let artifacts_clone = input_artifacts.clone();
 
                 join_set.spawn(async move {
                     // Each parallel step acquires its own sandbox container
@@ -229,6 +234,11 @@ impl Orchestrator {
                         "container_id": &container_id[..12.min(container_id.len())],
                         "step": idx + 1,
                     })).await;
+
+                    // Write input artifacts into the sandbox before the agent runs
+                    if let Err(e) = Self::write_input_artifacts(&sandbox_handle, &artifacts_clone).await {
+                        tracing::warn!("Failed to write input artifacts for step {}: {e}", idx + 1);
+                    }
 
                     let result = orch.execute_single_step(
                         task_id, &step, idx, total_steps, &plan_step,
@@ -492,8 +502,57 @@ impl Orchestrator {
         Err(err)
     }
 
+    /// Write input artifacts into the sandbox /workspace/ directory.
+    ///
+    /// Artifact content is stored as base64 in the DB. To avoid shell
+    /// command-line length limits for large files, we write the base64 text to
+    /// a temporary file via SandboxHandle::write_file, then decode it with
+    /// `base64 -d` into the final workspace path.
+    async fn write_input_artifacts(
+        sandbox: &SandboxHandle,
+        artifacts: &[InputArtifact],
+    ) -> Result<(), AppError> {
+        for artifact in artifacts {
+            let b64_content = artifact.content.as_deref().unwrap_or("");
+            if b64_content.is_empty() {
+                continue;
+            }
+
+            let dest = format!("/workspace/{}", artifact.name);
+            let tmp = format!("/tmp/.input_{}.b64", artifact.name);
+
+            // Write the base64 text to a temp file (write_file handles quoting safely)
+            sandbox.write_file(&tmp, b64_content).await
+                .map_err(|e| AppError::Internal(format!(
+                    "Failed to stage input file '{}': {}", artifact.name, e
+                )))?;
+
+            // Decode from the temp file into the workspace path
+            let cmd = format!("base64 -d {} > {}", tmp, dest);
+            let result = sandbox.exec(&["bash", "-c", &cmd]).await
+                .map_err(|e| AppError::Internal(format!(
+                    "Failed to decode input file '{}': {}", artifact.name, e
+                )))?;
+
+            if result.exit_code != 0 {
+                return Err(AppError::Internal(format!(
+                    "base64 decode failed for '{}': {}", artifact.name, result.stderr
+                )));
+            }
+
+            // Clean up temp file
+            let _ = sandbox.exec(&["rm", "-f", &tmp]).await;
+        }
+        Ok(())
+    }
+
     /// Create the initial execution plan
-    async fn create_plan(&self, goal: &str, user_context: Option<&str>) -> Result<Vec<Value>, AppError> {
+    async fn create_plan(
+        &self,
+        goal: &str,
+        user_context: Option<&str>,
+        input_artifacts: &[InputArtifact],
+    ) -> Result<Vec<Value>, AppError> {
         let agent_list = self.agents.list();
         let agent_descriptions = agent_list.iter()
             .map(|(name, desc)| format!("- {name}: {desc}"))
@@ -505,8 +564,27 @@ impl Orchestrator {
 
         let system = soul::system_prompt(role_instructions, user_context);
 
+        // Build optional file list section for the planning prompt
+        let file_list_section = if !input_artifacts.is_empty() {
+            let file_list: String = input_artifacts
+                .iter()
+                .map(|a| format!(
+                    "- {} ({}, {} bytes)",
+                    a.name,
+                    a.mime_type.as_deref().unwrap_or("unknown type"),
+                    a.content.as_deref().unwrap_or("").len() * 3 / 4, // approx decoded size
+                ))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "\n\nUser-provided files (available in /workspace/ inside the sandbox):\n{file_list}\n"
+            )
+        } else {
+            String::new()
+        };
+
         let plan_prompt = format!(
-            "Goal: {goal}\n\n\
+            "Goal: {goal}{file_list_section}\n\n\
              Available agents:\n{agent_descriptions}\n\n\
              PLANNING GUIDELINES:\n\
              1. Break the goal into the MINIMUM number of steps needed\n\
