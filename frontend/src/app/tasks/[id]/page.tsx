@@ -6,6 +6,7 @@ import Link from "next/link";
 import ArtifactViewer, { type Artifact } from "@/components/ArtifactViewer";
 import StepsSidebar from "@/components/StepsSidebar";
 import { useAuth } from "@/components/AuthProvider";
+import ResultCard from "@/components/ResultCard";
 
 interface TaskEvent {
   id?: string;
@@ -210,6 +211,7 @@ export default function TaskPage() {
   const [elapsed, setElapsed] = useState(0);
   const startTimeRef = useRef(Date.now());
   const [cancelling, setCancelling] = useState(false);
+  const [showTrace, setShowTrace] = useState(false);
 
   // Reconnection state
   const reconnectAttempt = useRef(0);
@@ -619,102 +621,133 @@ export default function TaskPage() {
               </p>
             </div>
 
-            {/* Tabs */}
-            <div
-              className="flex items-center gap-0 mb-5 rounded-lg overflow-hidden"
-              style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}
-            >
-              {(["events", "artifacts"] as const).map((tab) => (
+            {/* ── Result Card (completed tasks only) ─────────── */}
+            {task?.status === "completed" && task.result && (
+              <div className="mx-auto max-w-[900px] px-4 pt-4">
+                <ResultCard
+                  result={task.result as unknown as { summary?: string; key_outputs?: string[]; artifacts?: string[]; next_steps?: string[] }}
+                  artifacts={artifacts}
+                  taskId={id}
+                />
                 <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className="flex-1 py-2.5 text-[12px] font-medium uppercase tracking-wider transition-all"
-                  style={{
-                    background: activeTab === tab ? "var(--bg-elevated)" : "transparent",
-                    color: activeTab === tab ? "var(--text-primary)" : "var(--text-tertiary)",
-                    borderBottom: activeTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
-                  }}
+                  onClick={() => setShowTrace((v) => !v)}
+                  className="mt-3 flex items-center gap-1.5 text-[12px] cursor-pointer transition-colors"
+                  style={{ color: "var(--text-tertiary)" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = "var(--text-secondary)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-tertiary)")}
                 >
-                  {tab === "events" ? `Events (${events.length})` : `Artifacts (${artifacts.length})`}
-                </button>
-              ))}
-            </div>
-
-            {/* Events tab — Narrative Timeline */}
-            {activeTab === "events" && (
-              <div className="mb-8">
-                {status === "live" && (
-                  <div className="flex items-center gap-1.5 mb-3">
-                    <span className="relative flex h-1.5 w-1.5">
-                      <span
-                        className="absolute inline-flex h-full w-full rounded-full opacity-75"
-                        style={{ background: "var(--status-running)", animation: "pulse-ring 1.5s ease-out infinite" }}
-                      />
-                      <span
-                        className="relative inline-flex h-1.5 w-1.5 rounded-full"
-                        style={{ background: "var(--status-running)" }}
-                      />
-                    </span>
-                    <span className="text-[11px] font-mono" style={{ color: "var(--status-running)" }}>
-                      streaming
-                    </span>
-                  </div>
-                )}
-
-                {events.length === 0 ? (
-                  <div className="flex flex-col gap-3 py-8">
-                    <div className="animate-shimmer h-4 w-48 rounded" />
-                    <div className="animate-shimmer h-4 w-32 rounded" />
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-0">
-                    {timeline.map((entry, i) => {
-                      if (entry.type === "system") {
-                        return (
-                          <EventRow
-                            key={entry.event.id ?? `sys-${i}`}
-                            event={entry.event}
-                            index={i}
-                            formatTimestamp={formatTimestamp}
-                          />
-                        );
-                      }
-                      return (
-                        <StepBlock
-                          key={`step-${entry.stepNumber}-${i}`}
-                          group={entry}
-                          formatTimestamp={formatTimestamp}
-                          defaultOpen={entry.status === "running"}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
-                <div ref={bottomRef} />
-              </div>
-            )}
-
-            {/* Artifacts tab */}
-            {activeTab === "artifacts" && (
-              <div className="mb-8">
-                {artifacts.length === 0 ? (
-                  <div
-                    className="rounded-xl p-8 text-center"
-                    style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}
+                  <svg
+                    width="12" height="12" fill="none" viewBox="0 0 24 24"
+                    stroke="currentColor" strokeWidth={2}
+                    style={{ transform: showTrace ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}
                   >
-                    <p className="text-[13px]" style={{ color: "var(--text-tertiary)" }}>
-                      {status === "live" ? "Artifacts will appear here as they are created..." : "No artifacts produced for this task."}
-                    </p>
-                  </div>
-                ) : (
-                  <ArtifactViewer artifacts={artifacts} taskId={id} />
-                )}
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                  </svg>
+                  {showTrace ? "Hide" : "Show"} execution trace
+                </button>
               </div>
             )}
 
-            {/* Result */}
-            {status === "completed" && task?.result && (
-              <ResultBlock result={task.result} />
+            {(task?.status !== "completed" || showTrace) && (
+              <>
+                {/* Tabs */}
+                <div
+                  className="flex items-center gap-0 mb-5 rounded-lg overflow-hidden"
+                  style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}
+                >
+                  {(["events", "artifacts"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      className="flex-1 py-2.5 text-[12px] font-medium uppercase tracking-wider transition-all"
+                      style={{
+                        background: activeTab === tab ? "var(--bg-elevated)" : "transparent",
+                        color: activeTab === tab ? "var(--text-primary)" : "var(--text-tertiary)",
+                        borderBottom: activeTab === tab ? "2px solid var(--accent)" : "2px solid transparent",
+                      }}
+                    >
+                      {tab === "events" ? `Events (${events.length})` : `Artifacts (${artifacts.length})`}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Events tab — Narrative Timeline */}
+                {activeTab === "events" && (
+                  <div className="mb-8">
+                    {status === "live" && (
+                      <div className="flex items-center gap-1.5 mb-3">
+                        <span className="relative flex h-1.5 w-1.5">
+                          <span
+                            className="absolute inline-flex h-full w-full rounded-full opacity-75"
+                            style={{ background: "var(--status-running)", animation: "pulse-ring 1.5s ease-out infinite" }}
+                          />
+                          <span
+                            className="relative inline-flex h-1.5 w-1.5 rounded-full"
+                            style={{ background: "var(--status-running)" }}
+                          />
+                        </span>
+                        <span className="text-[11px] font-mono" style={{ color: "var(--status-running)" }}>
+                          streaming
+                        </span>
+                      </div>
+                    )}
+
+                    {events.length === 0 ? (
+                      <div className="flex flex-col gap-3 py-8">
+                        <div className="animate-shimmer h-4 w-48 rounded" />
+                        <div className="animate-shimmer h-4 w-32 rounded" />
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-0">
+                        {timeline.map((entry, i) => {
+                          if (entry.type === "system") {
+                            return (
+                              <EventRow
+                                key={entry.event.id ?? `sys-${i}`}
+                                event={entry.event}
+                                index={i}
+                                formatTimestamp={formatTimestamp}
+                              />
+                            );
+                          }
+                          return (
+                            <StepBlock
+                              key={`step-${entry.stepNumber}-${i}`}
+                              group={entry}
+                              formatTimestamp={formatTimestamp}
+                              defaultOpen={entry.status === "running"}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div ref={bottomRef} />
+                  </div>
+                )}
+
+                {/* Artifacts tab */}
+                {activeTab === "artifacts" && (
+                  <div className="mb-8">
+                    {artifacts.length === 0 ? (
+                      <div
+                        className="rounded-xl p-8 text-center"
+                        style={{ background: "var(--bg-raised)", border: "1px solid var(--border-subtle)" }}
+                      >
+                        <p className="text-[13px]" style={{ color: "var(--text-tertiary)" }}>
+                          {status === "live" ? "Artifacts will appear here as they are created..." : "No artifacts produced for this task."}
+                        </p>
+                      </div>
+                    ) : (
+                      <ArtifactViewer artifacts={artifacts} taskId={id} />
+                    )}
+                  </div>
+                )}
+
+                {/* Result */}
+                {status === "completed" && task?.result && (
+                  <ResultBlock result={task.result} />
+                )}
+              </>
             )}
 
             {/* Error */}
