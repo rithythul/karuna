@@ -99,6 +99,14 @@ pub struct ReasoningTrace {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct InputArtifact {
+    pub id: Uuid,
+    pub name: String,
+    pub mime_type: Option<String>,
+    pub content: Option<String>, // base64-encoded content
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateTaskRequest {
     pub goal: String,

@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::models::{Artifact, ReasoningTrace, Task, TaskEvent, TaskStatus, TaskStep, UserMemory};
+use crate::models::{Artifact, InputArtifact, ReasoningTrace, Task, TaskEvent, TaskStatus, TaskStep, UserMemory};
 
 pub async fn create_task(pool: &PgPool, user_id: &str, goal: &str) -> Result<Task, AppError> {
     let task = sqlx::query_as::<_, Task>(
@@ -195,6 +195,41 @@ pub async fn get_artifact(pool: &PgPool, artifact_id: Uuid) -> Result<Artifact, 
 pub async fn get_task_artifacts(pool: &PgPool, task_id: Uuid) -> Result<Vec<Artifact>, AppError> {
     let artifacts = sqlx::query_as::<_, Artifact>(
         "SELECT * FROM artifacts WHERE task_id = $1 ORDER BY created_at"
+    )
+    .bind(task_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(artifacts)
+}
+
+pub async fn create_input_artifact(
+    pool: &PgPool,
+    task_id: Uuid,
+    name: &str,
+    mime_type: &str,
+    content: &str, // base64-encoded
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO artifacts (task_id, name, artifact_type, mime_type, content) \
+         VALUES ($1, $2, 'input', $3, $4)"
+    )
+    .bind(task_id)
+    .bind(name)
+    .bind(mime_type)
+    .bind(content)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_input_artifacts(
+    pool: &PgPool,
+    task_id: Uuid,
+) -> Result<Vec<InputArtifact>, AppError> {
+    let artifacts = sqlx::query_as::<_, InputArtifact>(
+        "SELECT id, name, mime_type, content FROM artifacts \
+         WHERE task_id = $1 AND artifact_type = 'input' \
+         ORDER BY created_at ASC"
     )
     .bind(task_id)
     .fetch_all(pool)
