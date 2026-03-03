@@ -109,7 +109,10 @@ async fn handle_multipart_task(
                 return Err(AppError::BadRequest("Maximum 5 files allowed".into()));
             }
 
-            let filename = field.file_name().unwrap_or("file").to_string();
+            let filename = field
+                .file_name()
+                .unwrap_or("file")
+                .replace(['\\', '"', '\r', '\n', '\0'], "_");
             let mime_type = field
                 .content_type()
                 .unwrap_or("application/octet-stream")
