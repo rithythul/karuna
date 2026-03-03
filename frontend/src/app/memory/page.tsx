@@ -109,7 +109,27 @@ export default function MemoryPage() {
         { method: "DELETE" }
       );
       if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
-      fetchMemories();
+      // Await re-fetch to keep the lock until the list is refreshed
+      await new Promise<void>((resolve) => {
+        if (!user) { resolve(); return; }
+        setLoading(true);
+        setError(null);
+        fetch("/api/memory")
+          .then((res) => {
+            if (!res.ok) throw new Error(`Failed to load memories: ${res.status}`);
+            return res.json();
+          })
+          .then((data) => {
+            const all: Memory[] = data.memories ?? [];
+            setGrouped({
+              preference: all.filter((m) => m.category === "preference"),
+              fact: all.filter((m) => m.category === "fact"),
+              learning: all.filter((m) => m.category === "learning"),
+            });
+          })
+          .catch((err) => setError(err instanceof Error ? err.message : "Failed to load"))
+          .finally(() => { setLoading(false); resolve(); });
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed");
     } finally {
@@ -294,12 +314,26 @@ export default function MemoryPage() {
                                   </span>
                                 )}
                               </div>
-                              <p
-                                className="text-[13px] leading-relaxed"
-                                style={{ color: "var(--text-primary)" }}
-                              >
-                                {formatValue(memory.value)}
-                              </p>
+                              {typeof memory.value === "string" ? (
+                                <p
+                                  className="text-[13px] leading-relaxed"
+                                  style={{ color: "var(--text-primary)" }}
+                                >
+                                  {memory.value}
+                                </p>
+                              ) : (
+                                <pre
+                                  className="text-[12px] leading-relaxed overflow-auto"
+                                  style={{
+                                    color: "var(--text-primary)",
+                                    fontFamily: "monospace",
+                                    whiteSpace: "pre-wrap",
+                                    wordBreak: "break-word",
+                                  }}
+                                >
+                                  {JSON.stringify(memory.value, null, 2)}
+                                </pre>
+                              )}
                             </div>
                             <button
                               onClick={() =>
