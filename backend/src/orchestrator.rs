@@ -235,10 +235,13 @@ impl Orchestrator {
                         "step": idx + 1,
                     })).await;
 
-                    // Write input artifacts into the sandbox before the agent runs
-                    if let Err(e) = Self::write_input_artifacts(&sandbox_handle, &artifacts_clone).await {
-                        tracing::warn!("Failed to write input artifacts for step {}: {e}", idx + 1);
-                    }
+                    // Write input artifacts into the sandbox before the agent runs.
+                    // A failure here means the agent would run without its required files,
+                    // so we propagate the error and fail the step immediately.
+                    Self::write_input_artifacts(&sandbox_handle, &artifacts_clone).await
+                        .map_err(|e| AppError::Internal(
+                            format!("Failed to stage input files for step {}: {e}", idx + 1)
+                        ))?;
 
                     let result = orch.execute_single_step(
                         task_id, &step, idx, total_steps, &plan_step,
@@ -518,8 +521,15 @@ impl Orchestrator {
                 continue;
             }
 
-            let dest = format!("/workspace/{}", artifact.name);
-            let tmp = format!("/tmp/.input_{}.b64", artifact.name);
+            // Re-sanitize the filename to [a-zA-Z0-9._-] only so it is safe to
+            // single-quote inside a POSIX sh command string.  Single-quoting a
+            // string that contains only these characters is always shell-safe.
+            let safe_name: String = artifact.name.chars()
+                .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+                .collect();
+
+            let dest = format!("/workspace/{}", safe_name);
+            let tmp = format!("/tmp/.input_{}.b64", safe_name);
 
             // Write the base64 text to a temp file (write_file handles quoting safely)
             sandbox.write_file(&tmp, b64_content).await
@@ -527,9 +537,11 @@ impl Orchestrator {
                     "Failed to stage input file '{}': {}", artifact.name, e
                 )))?;
 
-            // Decode from the temp file into the workspace path
-            let cmd = format!("base64 -d {} > {}", tmp, dest);
-            let result = sandbox.exec(&["bash", "-c", &cmd]).await
+            // Decode from the temp file into the workspace path.
+            // safe_name contains only [a-zA-Z0-9._-], so single-quoting the
+            // derived paths in the sh command is safe — no shell injection possible.
+            let cmd = format!("base64 -d '{}' > '{}'", tmp, dest);
+            let result = sandbox.exec(&["sh", "-c", &cmd]).await
                 .map_err(|e| AppError::Internal(format!(
                     "Failed to decode input file '{}': {}", artifact.name, e
                 )))?;
