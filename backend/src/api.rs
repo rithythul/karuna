@@ -89,7 +89,7 @@ async fn handle_multipart_task(
     let mut goal: Option<String> = None;
     let mut files: Vec<(String, String, String)> = Vec::new(); // (name, mime_type, base64_content)
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::BadRequest(format!("Multipart error: {e}")))?
@@ -103,7 +103,7 @@ async fn handle_multipart_task(
                     .await
                     .map_err(|e| AppError::BadRequest(format!("Failed to read goal: {e}")))?,
             );
-        } else {
+        } else if field.file_name().is_some() {
             // File field — validate count and size
             if files.len() >= 5 {
                 return Err(AppError::BadRequest("Maximum 5 files allowed".into()));
@@ -115,34 +115,41 @@ async fn handle_multipart_task(
                 .unwrap_or("application/octet-stream")
                 .to_string();
 
-            let bytes = field
-                .bytes()
-                .await
-                .map_err(|e| AppError::BadRequest(format!("Failed to read file: {e}")))?;
-
-            if bytes.len() > 10 * 1024 * 1024 {
-                return Err(AppError::BadRequest(format!(
-                    "File '{}' exceeds 10 MB limit",
-                    filename
-                )));
+            const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+            let mut buf = Vec::with_capacity(64 * 1024);
+            while let Some(chunk) = field.chunk().await
+                .map_err(|e| AppError::BadRequest(format!("Failed to read file: {e}")))?
+            {
+                if buf.len() + chunk.len() > MAX_FILE_SIZE {
+                    return Err(AppError::BadRequest(
+                        format!("File '{}' exceeds 10 MB limit", filename)
+                    ));
+                }
+                buf.extend_from_slice(&chunk);
             }
-
-            let content = BASE64.encode(&bytes);
+            let content = BASE64.encode(&buf);
             files.push((filename, mime_type, content));
+        } else {
+            // Unknown text field — skip it silently
         }
     }
 
     let goal = goal.ok_or_else(|| AppError::BadRequest("Missing 'goal' field".into()))?;
 
-    let resp = create_task_core(&state, &auth.0.id, &goal).await?;
+    // Insert task into DB first (no Redis enqueue yet)
+    let task = db::create_task(&state.db, &auth.0.id, &goal).await?;
 
+    // Store all artifacts before enqueuing — if this fails the task stays unqueued
     for (name, mime_type, content) in &files {
-        db::create_input_artifact(&state.db, resp.task_id, name, mime_type, content)
+        db::create_input_artifact(&state.db, task.id, name, mime_type, content)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to store artifact: {e}")))?;
     }
 
-    Ok(Json(resp))
+    // Only enqueue to Redis after all DB writes have succeeded
+    state.orchestrator.enqueue(task.id).await?;
+
+    Ok(Json(CreateTaskResponse { task_id: task.id }))
 }
 
 async fn list_tasks(
