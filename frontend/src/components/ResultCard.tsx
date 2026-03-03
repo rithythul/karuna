@@ -121,7 +121,7 @@ export default function ResultCard({ result, artifacts, taskId }: ResultCardProp
 
   useEffect(() => {
     setSelectedId(outputArtifacts.length > 0 ? outputArtifacts[0].id : null);
-  }, [outputArtifacts.length]);
+  }, [outputArtifacts.length, outputArtifacts[0]?.id]);
 
   const selected = outputArtifacts.find((a) => a.id === selectedId) ?? null;
 
