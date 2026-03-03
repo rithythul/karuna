@@ -545,6 +545,8 @@ export default function TaskPage() {
             href="/memory"
             className="text-[12px] font-medium transition-colors"
             style={{ color: "var(--text-secondary)" }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--text-primary)")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-secondary)")}
           >
             Memory
           </Link>
