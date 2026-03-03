@@ -4,7 +4,10 @@ use crate::agent_runtime::Agent;
 use crate::soul;
 use crate::tools::{AgentTool, DelegateTool, ReadFileTool, RunShellTool, WebSearchTool, WriteFileTool};
 
-pub struct ResearchAgent;
+pub struct ResearchAgent {
+    pub search_api_key: Option<String>,
+    pub search_provider: String,
+}
 
 #[async_trait]
 impl Agent for ResearchAgent {
@@ -28,7 +31,10 @@ impl Agent for ResearchAgent {
 
     fn tools(&self) -> Vec<Arc<dyn AgentTool>> {
         vec![
-            Arc::new(WebSearchTool::new(None, "duckduckgo".into())),
+            Arc::new(WebSearchTool::new(
+                self.search_api_key.clone(),
+                self.search_provider.clone(),
+            )),
             Arc::new(ReadFileTool),
             Arc::new(WriteFileTool),
             Arc::new(RunShellTool),

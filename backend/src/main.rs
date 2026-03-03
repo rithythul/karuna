@@ -64,7 +64,7 @@ async fn main() {
         .expect("Failed to connect to Docker");
     // Don't warm pool on startup for dev — it requires the sandbox image to be built
     // sandbox.warm_pool(3).await.expect("Failed to warm sandbox pool");
-    let agents = Arc::new(agents::default_registry());
+    let agents = Arc::new(agents::default_registry(&config));
 
     let orchestrator = orchestrator::Orchestrator::new(
         db.clone(), llm.clone(), sandbox.clone(), agents.clone(), redis.clone(),
