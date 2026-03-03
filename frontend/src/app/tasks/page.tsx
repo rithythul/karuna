@@ -158,19 +158,28 @@ export default function TaskHistoryPage() {
         >
           Task History
         </h1>
-        <Link
-          href="/"
-          className="flex items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-medium transition-all duration-200"
-          style={{
-            background: "var(--accent)",
-            color: "var(--text-on-accent)",
-          }}
-        >
-          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
-          New Task
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/memory"
+            className="text-[12px] font-medium transition-colors"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            Memory
+          </Link>
+          <Link
+            href="/"
+            className="flex items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-medium transition-all duration-200"
+            style={{
+              background: "var(--accent)",
+              color: "var(--text-on-accent)",
+            }}
+          >
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            New Task
+          </Link>
+        </div>
       </header>
 
       {/* Content */}
