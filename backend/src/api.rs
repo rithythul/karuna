@@ -1,10 +1,11 @@
 use axum::{
-    extract::{Path, State},
+    extract::{FromRequest, Multipart, Path, State},
     http::{header, HeaderMap},
     response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
@@ -38,17 +39,110 @@ pub fn routes() -> Router<AppState> {
         .route("/api/status", get(system_status))
 }
 
-async fn create_task(
-    auth: AuthUser,
-    State(state): State<AppState>,
-    Json(req): Json<CreateTaskRequest>,
-) -> Result<Json<CreateTaskResponse>, AppError> {
-    let task = db::create_task(&state.db, &auth.0.id, &req.goal).await?;
+/// Shared task creation logic used by both the JSON and multipart paths.
+async fn create_task_core(
+    state: &AppState,
+    user_id: &str,
+    goal: &str,
+) -> Result<CreateTaskResponse, AppError> {
+    let task = db::create_task(&state.db, user_id, goal).await?;
 
     // Enqueue to Redis job queue
     state.orchestrator.enqueue(task.id).await?;
 
-    Ok(Json(CreateTaskResponse { task_id: task.id }))
+    Ok(CreateTaskResponse { task_id: task.id })
+}
+
+async fn create_task(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+) -> Result<Json<CreateTaskResponse>, AppError> {
+    let content_type = request
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    if content_type.starts_with("multipart/form-data") {
+        let multipart = Multipart::from_request(request, &state)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Multipart error: {e}")))?;
+        handle_multipart_task(state, auth, multipart).await
+    } else {
+        let body_bytes = axum::body::to_bytes(request.into_body(), 1024 * 1024)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Failed to read body: {e}")))?;
+        let req: CreateTaskRequest = serde_json::from_slice(&body_bytes)
+            .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {e}")))?;
+        let resp = create_task_core(&state, &auth.0.id, &req.goal).await?;
+        Ok(Json(resp))
+    }
+}
+
+async fn handle_multipart_task(
+    state: AppState,
+    auth: AuthUser,
+    mut multipart: Multipart,
+) -> Result<Json<CreateTaskResponse>, AppError> {
+    let mut goal: Option<String> = None;
+    let mut files: Vec<(String, String, String)> = Vec::new(); // (name, mime_type, base64_content)
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Multipart error: {e}")))?
+    {
+        let field_name = field.name().unwrap_or("").to_string();
+
+        if field_name == "goal" {
+            goal = Some(
+                field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("Failed to read goal: {e}")))?,
+            );
+        } else {
+            // File field — validate count and size
+            if files.len() >= 5 {
+                return Err(AppError::BadRequest("Maximum 5 files allowed".into()));
+            }
+
+            let filename = field.file_name().unwrap_or("file").to_string();
+            let mime_type = field
+                .content_type()
+                .unwrap_or("application/octet-stream")
+                .to_string();
+
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::BadRequest(format!("Failed to read file: {e}")))?;
+
+            if bytes.len() > 10 * 1024 * 1024 {
+                return Err(AppError::BadRequest(format!(
+                    "File '{}' exceeds 10 MB limit",
+                    filename
+                )));
+            }
+
+            let content = BASE64.encode(&bytes);
+            files.push((filename, mime_type, content));
+        }
+    }
+
+    let goal = goal.ok_or_else(|| AppError::BadRequest("Missing 'goal' field".into()))?;
+
+    let resp = create_task_core(&state, &auth.0.id, &goal).await?;
+
+    for (name, mime_type, content) in &files {
+        db::create_input_artifact(&state.db, resp.task_id, name, mime_type, content)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to store artifact: {e}")))?;
+    }
+
+    Ok(Json(resp))
 }
 
 async fn list_tasks(
