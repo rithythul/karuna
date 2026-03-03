@@ -259,6 +259,8 @@ mod tests {
             koompi_redirect_uri: String::new(),
             public_url: String::new(),
             dev_mode: true,
+            search_api_key: None,
+            search_provider: "duckduckgo".into(),
         }
     }
 
