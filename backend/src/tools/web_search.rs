@@ -9,11 +9,16 @@ use super::{AgentTool, SandboxHandle, ToolResult};
 pub struct WebSearchTool {
     api_key: Option<String>,
     provider: String,
+    client: reqwest::Client,
 }
 
 impl WebSearchTool {
     pub fn new(api_key: Option<String>, provider: String) -> Self {
-        Self { api_key, provider }
+        Self {
+            api_key,
+            provider,
+            client: reqwest::Client::new(),
+        }
     }
 }
 
@@ -24,7 +29,11 @@ impl AgentTool for WebSearchTool {
     }
 
     fn description(&self) -> &str {
-        "Search the web using DuckDuckGo. Returns text search results."
+        match self.provider.as_str() {
+            "brave" => "Search the web using Brave Search. Returns structured results with title, URL, and description.",
+            "serper" => "Search the web using Google (via Serper). Returns structured results with title, URL, and description.",
+            _ => "Search the web using DuckDuckGo. Returns text search results.",
+        }
     }
 
     fn parameters_schema(&self) -> Value {
@@ -59,8 +68,8 @@ impl AgentTool for WebSearchTool {
             .ok_or_else(|| AppError::BadRequest("web_search: missing 'query' parameter".into()))?;
 
         match (&self.api_key, self.provider.as_str()) {
-            (Some(key), "brave") => search_brave(query, key).await,
-            (Some(key), "serper") => search_serper(query, key).await,
+            (Some(key), "brave") => search_brave(query, key, &self.client).await,
+            (Some(key), "serper") => search_serper(query, key, &self.client).await,
             _ => search_duckduckgo_fallback(query, sandbox).await,
         }
     }
@@ -105,14 +114,13 @@ async fn search_duckduckgo_fallback(
 
 /// Brave Search API — structured results, requires API key.
 /// Get a free key at https://brave.com/search/api/
-async fn search_brave(query: &str, api_key: &str) -> Result<ToolResult, AppError> {
+async fn search_brave(query: &str, api_key: &str, client: &reqwest::Client) -> Result<ToolResult, AppError> {
     let encoded = urlencod(query);
     let url = format!(
         "https://api.search.brave.com/res/v1/web/search\
          ?q={encoded}&count=10&text_decorations=false"
     );
 
-    let client = reqwest::Client::new();
     let resp = client
         .get(&url)
         .header("Accept", "application/json")
@@ -158,8 +166,7 @@ async fn search_brave(query: &str, api_key: &str) -> Result<ToolResult, AppError
 
 /// Serper API (Google Search) — structured results, requires API key.
 /// Get a free key at https://serper.dev/
-async fn search_serper(query: &str, api_key: &str) -> Result<ToolResult, AppError> {
-    let client = reqwest::Client::new();
+async fn search_serper(query: &str, api_key: &str, client: &reqwest::Client) -> Result<ToolResult, AppError> {
     let resp = client
         .post("https://google.serper.dev/search")
         .header("X-API-KEY", api_key)
