@@ -9,6 +9,8 @@ pub struct Config {
     pub default_model: String,
     pub planning_model: String,
     pub fast_model: String,
+    pub search_api_key: Option<String>,
+    pub search_provider: String,
     pub sandbox_image: String,
     pub sandbox_memory_limit: i64,
     pub sandbox_cpu_quota: i64,
@@ -44,6 +46,9 @@ impl Config {
                 .unwrap_or_else(|_| "anthropic/claude-sonnet-4".into()),
             fast_model: env::var("HANUMAN_FAST_MODEL")
                 .unwrap_or_else(|_| "anthropic/claude-haiku-4".into()),
+            search_api_key: env::var("HANUMAN_SEARCH_API_KEY").ok(),
+            search_provider: env::var("HANUMAN_SEARCH_PROVIDER")
+                .unwrap_or_else(|_| "brave".into()),
             sandbox_image: env::var("HANUMAN_SANDBOX_IMAGE")
                 .unwrap_or_else(|_| "hanuman-sandbox:latest".into()),
             sandbox_memory_limit: env::var("HANUMAN_SANDBOX_MEMORY_MB")
