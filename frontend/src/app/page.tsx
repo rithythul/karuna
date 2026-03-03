@@ -38,7 +38,28 @@ export default function Home() {
   const [goal, setGoal] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<File[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const ACCEPTED_EXTENSIONS = ".csv,.json,.txt,.pdf,.xlsx,.py,.js,.ts,.md,.png,.jpg,.jpeg,.gif,.webp";
+  const MAX_FILES = 5;
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files ?? []);
+    const remaining = MAX_FILES - attachments.length;
+    const toAdd = selected.slice(0, remaining).filter(
+      (f) => f.size <= MAX_FILE_SIZE
+    );
+    setAttachments((prev) => [...prev, ...toAdd]);
+    // Reset input so the same file can be re-selected
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const submitGoal = async (text: string) => {
     const trimmed = text.trim();
@@ -48,15 +69,29 @@ export default function Home() {
     setError(null);
 
     try {
+      let body: BodyInit;
+      let headers: Record<string, string> = {};
+
+      if (attachments.length > 0) {
+        const formData = new FormData();
+        formData.append("goal", trimmed);
+        attachments.forEach((file) => formData.append("file", file, file.name));
+        body = formData;
+        // Don't set Content-Type for FormData — browser sets it with boundary
+      } else {
+        body = JSON.stringify({ goal: trimmed });
+        headers["Content-Type"] = "application/json";
+      }
+
       const res = await fetch("/api/tasks", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goal: trimmed }),
+        headers,
+        body,
       });
 
       if (!res.ok) {
-        const body = await res.text();
-        throw new Error(body || `Request failed: ${res.status}`);
+        const errText = await res.text();
+        throw new Error(errText || `Request failed: ${res.status}`);
       }
 
       const data = await res.json();
@@ -198,6 +233,68 @@ export default function Home() {
               className="w-full bg-transparent px-5 pt-5 pb-14 text-[15px] leading-relaxed resize-none placeholder:text-[var(--text-tertiary)] focus:outline-none disabled:opacity-50"
               style={{ color: "var(--text-primary)" }}
             />
+            {/* File attachments */}
+            <div className="mt-2 px-5 pb-2">
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={ACCEPTED_EXTENSIONS}
+                onChange={handleFileChange}
+                className="hidden"
+              />
+
+              {/* Attached file chips */}
+              {attachments.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {attachments.map((file, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px]"
+                      style={{
+                        background: "var(--bg-elevated)",
+                        border: "1px solid var(--border-subtle)",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      <span className="max-w-[120px] truncate font-mono">{file.name}</span>
+                      <span style={{ color: "var(--text-tertiary)" }}>
+                        {(file.size / 1024).toFixed(0)}KB
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeAttachment(i)}
+                        className="cursor-pointer transition-colors"
+                        style={{ color: "var(--text-tertiary)" }}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--status-error)")}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-tertiary)")}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Paperclip button — only show if under the limit */}
+              {attachments.length < MAX_FILES && (
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center gap-1.5 text-[12px] transition-colors cursor-pointer"
+                  style={{ color: "var(--text-tertiary)" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = "var(--text-secondary)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-tertiary)")}
+                >
+                  <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+                  </svg>
+                  Attach file{attachments.length > 0 ? ` (${attachments.length}/${MAX_FILES})` : ""}
+                </button>
+              )}
+            </div>
+
             <div className="absolute bottom-0 left-0 right-0 flex items-center justify-end px-4 pb-3.5">
               <button
                 type="submit"
