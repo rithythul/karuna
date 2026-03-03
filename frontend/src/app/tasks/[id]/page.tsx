@@ -540,6 +540,15 @@ export default function TaskPage() {
             {formatTime(elapsed)}
           </span>
 
+          {/* Memory link */}
+          <Link
+            href="/memory"
+            className="text-[12px] font-medium transition-colors"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            Memory
+          </Link>
+
           {/* User */}
           <div className="flex items-center gap-2 ml-2 pl-2" style={{ borderLeft: "1px solid var(--border-subtle)" }}>
             <span className="text-[12px]" style={{ color: "var(--text-tertiary)" }}>
