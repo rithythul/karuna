@@ -42,11 +42,6 @@ const CATEGORY_CONFIG: Record<
   },
 };
 
-function formatValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  return JSON.stringify(value, null, 2);
-}
-
 function SpinnerIcon() {
   return (
     <svg className="animate-spin" width="24" height="24" viewBox="0 0 24 24" fill="none">
